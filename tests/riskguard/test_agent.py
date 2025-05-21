@@ -1,17 +1,17 @@
 import json
 import pytest
-from unittest.mock import MagicMock
+import pytest_asyncio
 
 # ADK Imports
 try:
     from google.adk.agents.invocation_context import InvocationContext
-    from google.adk.events import Event
-    from google.adk.sessions import BaseSessionService, InMemorySessionService, Session
+    from google.adk.events import Event, EventActions
+    from google.adk.sessions import InMemorySessionService, Session
     from google.genai import types as genai_types
 except ImportError:
     from tests.adk_mocks import (
-        BaseSessionService,
         Event,
+        EventActions,
         InvocationContext,
         Session,
         genai_types,
@@ -28,25 +28,27 @@ from riskguard.agent import RiskGuardAgent
 # --- Fixtures ---
 
 @pytest.fixture
-def agent():
+def agent() -> RiskGuardAgent:
     """Provides a RiskGuardAgent instance."""
     return RiskGuardAgent()
 
 @pytest.fixture
-def mock_session_service():
-    """Provides a mock or real InMemorySessionService instance."""
+def mock_session_service() -> InMemorySessionService:
+    """Provides an InMemorySessionService instance."""
     return InMemorySessionService()
 
-@pytest.fixture
-def mock_session(mock_session_service):
-    """Provides a mock session."""
-    return mock_session_service.create_session(app_name="test_app", user_id="test_user")
+@pytest_asyncio.fixture
+async def mock_session(mock_session_service: InMemorySessionService) -> Session:
+    """Provides an awaited session instance."""
+    return await mock_session_service.create_session(app_name="test_app", user_id="test_user")
 
-@pytest.fixture
-def mock_ctx(agent, mock_session_service, mock_session):
-    """Provides a base InvocationContext mock with default content."""
+@pytest_asyncio.fixture
+async def mock_ctx(agent: RiskGuardAgent, mock_session_service: InMemorySessionService, mock_session: Session) -> InvocationContext:
+    """Provides a base InvocationContext."""
     default_input_data = {"default": "data"}
-    mock_content = genai_types.Content(parts=[genai_types.Part(text=json.dumps(default_input_data))])
+    # Ensure genai_types.Part is correctly mocked if text is the only arg
+    mock_content_part = genai_types.Part(text=json.dumps(default_input_data))
+    mock_content = genai_types.Content(parts=[mock_content_part])
     return InvocationContext(
         user_content=mock_content,
         session_service=mock_session_service,
@@ -55,27 +57,27 @@ def mock_ctx(agent, mock_session_service, mock_session):
         session=mock_session
     )
 
-
-def test_riskguard_agent_instantiation(agent):
+def test_riskguard_agent_instantiation(agent: RiskGuardAgent):
     """Tests basic instantiation of the RiskGuardAgent."""
     assert agent is not None
     assert agent.name == "RiskGuard"
     assert agent.description == "Evaluates proposed trades against predefined risk rules."
 
 @pytest.mark.asyncio
-async def test_riskguard_run_async_impl_approve(agent, mock_ctx):
+async def test_riskguard_run_async_impl_approve(agent, mock_ctx: InvocationContext):
     """Tests _run_async_impl approves a valid trade."""
+    ctx = mock_ctx
     input_data = {
         "trade_proposal": {"action": "BUY", "ticker": "TEST", "quantity": 10, "price": 100.0},
         "portfolio_state": {"cash": 10000, "shares": 0, "total_value": 10000, "positions": {}},
         "max_pos_size": DEFAULT_RISKGUARD_MAX_POS_SIZE,
         "max_concentration": DEFAULT_RISKGUARD_MAX_CONCENTRATION
     }
-    mock_ctx.user_content = genai_types.Content(parts=[genai_types.Part(text=json.dumps(input_data))])
-    mock_ctx.invocation_id = "test_invocation_approve"
+    ctx.user_content = genai_types.Content(parts=[genai_types.Part(text=json.dumps(input_data))])
+    ctx.invocation_id = "test_invocation_approve"
 
     events = []
-    async for event in agent._run_async_impl(mock_ctx):
+    async for event in agent._run_async_impl(ctx):
         events.append(event)
 
     assert len(events) == 1
@@ -89,19 +91,20 @@ async def test_riskguard_run_async_impl_approve(agent, mock_ctx):
     assert result_data["reason"] == "Trade adheres to risk rules."
 
 @pytest.mark.asyncio
-async def test_riskguard_run_async_impl_reject_pos_size(agent, mock_ctx):
+async def test_riskguard_run_async_impl_reject_pos_size(agent, mock_ctx: InvocationContext):
     """Tests _run_async_impl rejects a trade exceeding max position size."""
+    ctx = mock_ctx
     input_data = {
         "trade_proposal": {"action": "BUY", "ticker": "TEST", "quantity": 60, "price": 100.0},
         "portfolio_state": {"cash": 10000, "shares": 0, "total_value": 10000, "positions": {}},
         "max_pos_size": 5000,
         "max_concentration": 0.8
     }
-    mock_ctx.user_content = genai_types.Content(parts=[genai_types.Part(text=json.dumps(input_data))])
-    mock_ctx.invocation_id = "test_invocation_reject"
+    ctx.user_content = genai_types.Content(parts=[genai_types.Part(text=json.dumps(input_data))])
+    ctx.invocation_id = "test_invocation_reject"
 
     events = []
-    async for event in agent._run_async_impl(mock_ctx):
+    async for event in agent._run_async_impl(ctx):
         events.append(event)
 
     assert len(events) == 1

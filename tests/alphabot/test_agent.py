@@ -1,18 +1,17 @@
 import pytest
 import json
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock
 
 # ADK Imports
 try:
     from google.adk.agents.invocation_context import InvocationContext
     from google.genai import types as genai_types
-    from google.adk.events import Event
-    from google.adk.sessions import InMemorySessionService
+    from google.adk.events import Event, EventActions
+    from google.adk.sessions import InMemorySessionService, Session
 except ImportError:
     from tests.adk_mocks import (
-        InvocationContext, genai_types, Event, InMemorySessionService
+        InvocationContext, genai_types, Event, EventActions, InMemorySessionService, Session # Import centralized EventActions
     )
-
 
 from alphabot.agent import AlphaBotAgent, A2ARiskCheckTool
 from common.config import DEFAULT_TICKER
@@ -39,11 +38,24 @@ async def test_alphabot_run_async_impl_no_signal():
     agent._should_be_long = False
 
     mock_a2a_tool = AsyncMock(spec=A2ARiskCheckTool)
-    mock_a2a_tool.name = "MockTool"
+    mock_a2a_tool.name = "MockTool" # Tool name for mock Event
     async def mock_run_async(*args, **kwargs):
-        yield Event(author=mock_a2a_tool.name, content=MagicMock())
+        # Simulate the tool yielding an event with a function response
+        yield Event(
+            author=mock_a2a_tool.name, # Event author matches tool name
+            content=genai_types.Content(parts=[
+                genai_types.Part(function_response=genai_types.FunctionResponse(
+                    name=mock_a2a_tool.name, # FunctionResponse name matches tool name
+                    response={"approved": True, "reason": "Mock tool approval"}
+                ))
+            ]),
+            turn_complete=True # Typically tool events are turn_complete
+        )
+        # This 'if False' block is a common pattern for async generators
+        # that might conditionally yield more items. It's fine as is.
         if False: # pragma: no cover
              yield
+
     mock_a2a_tool.run_async = mock_run_async
     agent.tools = [mock_a2a_tool]
 
@@ -56,17 +68,18 @@ async def test_alphabot_run_async_impl_no_signal():
         "trade_quantity": 10,
         "riskguard_url": "mock_url",
         "max_pos_size": 5000,
-        "max_concentration": 0.5
+        "max_concentration": 0.5,
+        "day": 1
     }
     mock_content = genai_types.Content(parts=[genai_types.Part(text=json.dumps(input_data))])
     mock_session_service = InMemorySessionService()
-    mock_session = mock_session_service.create_session(app_name="test_app", user_id="test_user")
+    mock_session_instance: Session = await mock_session_service.create_session(app_name="test_app", user_id="test_user")
     mock_ctx = InvocationContext(
         user_content=mock_content,
         session_service=mock_session_service,
         invocation_id="test_invocation_1",
         agent=agent,
-        session=mock_session
+        session=mock_session_instance
     )
 
     events = []
@@ -74,6 +87,17 @@ async def test_alphabot_run_async_impl_no_signal():
         events.append(event)
 
     assert len(events) == 1
-    assert events[0].author == agent.name
-    assert "No signal" in events[0].content.parts[0].text
-    assert not events[0].actions or not events[0].actions.state_delta
+    final_event = events[0]
+    assert final_event.author == agent.name
+    assert "No signal (Conditions not met)" in final_event.content.parts[0].text # Assuming text part for no signal
+
+    # Check EventActions (or lack thereof)
+    if final_event.actions: # final_event.actions could be None or an EventActions mock
+        assert not final_event.actions.state_delta
+        assert not final_event.actions.artifact_delta
+        assert final_event.actions.transfer_to_agent is None
+        assert final_event.actions.escalate is None
+        assert not final_event.actions.requested_auth_configs
+    else:
+        # If no actions are expected, this is also a valid state
+        assert final_event.actions is None or not final_event.actions # Handles None or an "empty" EventActions mock

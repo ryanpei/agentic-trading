@@ -1,11 +1,12 @@
 import json
 import logging
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Dict
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types as genai_types
+from pydantic import BaseModel, Field, ValidationError  # Import Pydantic
 
 from .rules import (
     DEFAULT_RISKGUARD_MAX_CONCENTRATION,
@@ -15,6 +16,27 @@ from .rules import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# --- Pydantic Input Models for RiskGuard ---
+class TradeProposalInput(BaseModel):
+    action: str
+    ticker: str
+    quantity: int
+    price: float
+
+
+class PortfolioStateInput(BaseModel):
+    cash: float
+    shares: int
+    total_value: float
+
+
+class RiskGuardInput(BaseModel):
+    trade_proposal: TradeProposalInput
+    portfolio_state: PortfolioStateInput
+    max_pos_size: float = Field(default=DEFAULT_RISKGUARD_MAX_POS_SIZE)
+    max_concentration: float = Field(default=DEFAULT_RISKGUARD_MAX_CONCENTRATION)
 
 
 class RiskGuardAgent(BaseAgent):
@@ -32,10 +54,15 @@ class RiskGuardAgent(BaseAgent):
         """
         Processes a risk check request received via A2A (simulated via message content).
         """
-        logger.info(f"Received risk check invocation")
+        invocation_id_short = ctx.invocation_id[:8]
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Received risk check invocation"
+        )
+
+        default_error_reason = "Internal Error: Failed to process input."
         result_dict = {
             "approved": False,
-            "reason": "Internal Error: Failed to process input.",
+            "reason": default_error_reason,
         }
 
         input_text = None
@@ -47,70 +74,72 @@ class RiskGuardAgent(BaseAgent):
             input_text = ctx.user_content.parts[0].text
 
         if not input_text:
-            logger.error("Input message text not found.")
+            logger.error(
+                f"[{self.name} ({invocation_id_short})] Input message text not found."
+            )
             result_dict["reason"] = "Internal Error: Missing input message text."
         else:
             try:
-                input_data = json.loads(input_text)
-                trade_proposal = input_data.get("trade_proposal")
-                portfolio_state = input_data.get("portfolio_state")
-                max_pos_size = input_data.get(
-                    "max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE
-                )
-                max_concentration = input_data.get(
-                    "max_concentration", DEFAULT_RISKGUARD_MAX_CONCENTRATION
-                )
-
+                input_payload = json.loads(input_text)
+                validated_input = RiskGuardInput(**input_payload)
                 logger.info(
-                    f"Parsed Input - Trade: {trade_proposal}, Portfolio: {portfolio_state}"
-                )
-                logger.info(
-                    f"Using Risk Params: max_pos_size={max_pos_size}, max_concentration={max_concentration}"
+                    f"[{self.name} ({invocation_id_short})] Successfully parsed and validated input: {validated_input.model_dump_json(indent=2)}"
                 )
 
-                if not trade_proposal or not portfolio_state:
-                    logger.warning(
-                        "Missing trade_proposal or portfolio_state in parsed input data."
-                    )
-                    result_dict["reason"] = (
-                        "Internal Error: Missing input data in message."
-                    )
-                else:
-                    result: RiskCheckResult = check_trade_risk_logic(
-                        trade_proposal=trade_proposal,
-                        portfolio_state=portfolio_state,
-                        max_pos_size=max_pos_size,
-                        max_concentration=max_concentration,
-                    )
-                    result_dict = {"approved": result.approved, "reason": result.reason}
+                # Pass Pydantic models or their dict representations to logic
+                # The check_trade_risk_logic expects dicts for trade_proposal and portfolio_state
+                result: RiskCheckResult = check_trade_risk_logic(
+                    trade_proposal=validated_input.trade_proposal.model_dump(),
+                    portfolio_state=validated_input.portfolio_state.model_dump(),
+                    max_pos_size=validated_input.max_pos_size,
+                    max_concentration=validated_input.max_concentration,
+                )
+                result_dict = {"approved": result.approved, "reason": result.reason}
 
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 logger.error(
-                    f"Failed to decode input JSON from message: {input_text[:100]}...",
+                    f"[{self.name} ({invocation_id_short})] Failed to decode input JSON from message: {input_text[:100]}... Error: {e}",
                     exc_info=True,
                 )
                 result_dict["reason"] = (
-                    "Internal Error: Invalid input data format in message."
+                    "Internal Error: Invalid input data format (JSON)."
                 )
+            except ValidationError as e:
+                logger.error(
+                    f"[{self.name} ({invocation_id_short})] Input validation failed: {e}. Input was: '{input_text[:200]}...'"
+                )
+                result_dict["reason"] = (
+                    f"Internal Error: Invalid input data structure - {e.errors()}"
+                )
+
             except Exception as e:
-                logger.error(f"Unexpected error processing input: {e}", exc_info=True)
+                logger.error(
+                    f"[{self.name} ({invocation_id_short})] Unexpected error processing input: {e}",
+                    exc_info=True,
+                )
                 result_dict["reason"] = f"Internal Error: {e}"
 
-        logger.info(f"Yielding result: {result_dict}")
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Yielding result: {result_dict}"
+        )
         yield Event(
             author=self.name,
             content=genai_types.Content(
                 parts=[
                     genai_types.Part(
                         function_response=genai_types.FunctionResponse(
-                            name="risk_check_result",
+                            name="risk_check_result",  # This name is used by AgentExecutor to extract the result
                             response=result_dict,
                         )
                     )
                 ]
             ),
-            turn_complete=True,
+            turn_complete=True,  # RiskGuard is a single-turn agent for each request
+        )
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Risk check invocation processed and result yielded."
         )
 
 
 root_agent = RiskGuardAgent()
+logger.info(f"RiskGuardAgent root_agent instance created.")

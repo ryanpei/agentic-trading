@@ -18,36 +18,40 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Common project imports
+import common.config as defaults
 import httpx
 import pandas as pd
 import plotly.graph_objects as go
+
+# A2A SDK Imports
+from a2a.client import A2AClient, A2AClientHTTPError, A2AClientJSONError
+from a2a.types import DataPart as A2ADataPart
+from a2a.types import JSONRPCErrorResponse  # Added
+from a2a.types import SendMessageSuccessResponse  # Added
+from a2a.types import Message as A2AMessage
+from a2a.types import MessageSendConfiguration, MessageSendParams
+from a2a.types import Role as A2ARole
+from a2a.types import SendMessageRequest, SendMessageResponse
+from a2a.types import Task as A2ATask
+from common.config import (
+    DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME,
+    DEFAULT_SIMULATOR_PORT,
+)  # Keep this for the uvicorn runner at the bottom
+from common.utils.indicators import calculate_sma
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from plotly.subplots import make_subplots
-from pydantic import BaseModel, Field
-
-import common.config as defaults
-from common.client import A2AClient
-from common.config import DEFAULT_SIMULATOR_PORT
-from common.types import (
-    DataPart,
-    Message,
-    SendTaskResponse,
-    Task,
-    TaskSendParams,
-    TaskState,
-    TextPart,
-)
-from common.utils.indicators import calculate_sma
+from pydantic import BaseModel, Field, ValidationError
 
 from .market import MarketDataSimulator
 from .portfolio import PortfolioState, TradeAction
 
 SIMULATOR_UI_LOGGER = "SimulatorUI"
 SIMULATOR_LOGIC_LOGGER = "SimulatorLogic"
-TRADE_DECISION_ARTIFACT_NAME = "trade_decision"
+TRADE_DECISION_ARTIFACT_NAME = DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -56,6 +60,7 @@ logger = logging.getLogger(SIMULATOR_UI_LOGGER)
 
 try:
     import common.utils.indicators
+
     import simulator.market
     import simulator.portfolio
 except ImportError as e:
@@ -338,11 +343,11 @@ async def _call_alphabot_a2a(
     sim_logger: logging.Logger,
 ) -> Dict[str, Any]:
     """
-    Prepares and sends a task to the AlphaBot A2A server for a given simulation day.
+    Prepares and sends a message to the AlphaBot A2A server for a given simulation day.
 
     Args:
         client: The A2AClient instance for AlphaBot.
-        session_id: The simulation session ID.
+        session_id: The simulation session ID (used as contextId).
         day: The current simulation day.
         current_price: The current market price.
         historical_prices: List of historical prices.
@@ -351,24 +356,18 @@ async def _call_alphabot_a2a(
         sim_logger: Logger instance for simulation logic.
 
     Returns:
-        A dictionary containing the outcome:
-        - 'approved_trade': Details of the approved trade (dict) or None.
-        - 'rejected_trade': Details of the rejected trade (dict) or None.
-        - 'reason': Reason text for approval/rejection (str) or None.
-        - 'error': Error message if the A2A call failed (str) or None.
+        A dictionary containing the outcome.
     """
-    a2a_task_id = f"{session_id}-day{day}"
-    market_data_part = DataPart(
-        data={
-            "market_data": {
-                "day": day,
-                "current_price": current_price,
-                "historical_prices": historical_prices,
-            }
+    a2a_task_id = f"sim-{session_id}-day{day}"  # This will be the taskId in the Message
+
+    market_data_part_data = {
+        "market_data": {
+            "day": day,
+            "current_price": current_price,
+            "historical_prices": historical_prices,
         }
-    )
-    portfolio_state_part = DataPart(data={"portfolio_state": portfolio.__dict__})
-    a2a_message = Message(role="user", parts=[market_data_part, portfolio_state_part])
+    }
+    portfolio_state_part_data = {"portfolio_state": portfolio.__dict__}
 
     agent_params_metadata = {
         "short_sma": params["alphabot_short_sma"],
@@ -383,13 +382,31 @@ async def _call_alphabot_a2a(
     }
     sim_logger.debug(f"  >> Metadata for A2A call: {agent_params_metadata}")
 
-    a2a_params = TaskSendParams(
-        id=a2a_task_id,
-        sessionId=session_id,
-        message=a2a_message,
-        acceptedOutputModes=["data", "application/json"],
+    # Construct a2a.types.Message for the new SDK
+    sdk_message = A2AMessage(
+        taskId=a2a_task_id,
+        contextId=session_id,
+        messageId=str(uuid.uuid4()),
+        role=A2ARole.user,
+        parts=[
+            A2ADataPart(
+                data=market_data_part_data["market_data"]
+            ),  # Pass data directly
+            A2ADataPart(data=portfolio_state_part_data["portfolio_state"]),
+        ],
         metadata=agent_params_metadata,
     )
+    sdk_send_params = MessageSendParams(
+        message=sdk_message,
+        configuration=MessageSendConfiguration(
+            acceptedOutputModes=[
+                "data",
+                "application/json",
+            ]  # As per old TaskSendParams
+        ),
+    )
+    # The id for SendMessageRequest is the JSON-RPC request id, not the task id
+    sdk_request = SendMessageRequest(id=str(uuid.uuid4()), params=sdk_send_params)
 
     sim_logger.info(f"--- Calling AlphaBot A2A Server (Task ID: {a2a_task_id}) ---")
     outcome = {
@@ -399,53 +416,76 @@ async def _call_alphabot_a2a(
         "error": None,
     }
     try:
-        response: SendTaskResponse = await client.send_task(
-            a2a_params.model_dump(exclude_none=True)
-        )
+        # The client instance is already passed with an httpx_client
+        response: SendMessageResponse = await client.send_message(sdk_request)
 
-        if response.error:
+        # The response.root can be either JSONRPCErrorResponse or SendMessageSuccessResponse
+        root_response_part = response.root
+
+        if isinstance(
+            root_response_part, JSONRPCErrorResponse
+        ):  # Check if it's an error response
+            actual_error = root_response_part.error
             sim_logger.error(
-                f"A2A Error from AlphaBot: {response.error.code} - {response.error.message}"
+                f"A2A Error from AlphaBot: {actual_error.code} - {actual_error.message}"
             )
-            outcome["error"] = f"A2A Error: {response.error.message}"
-        elif response.result:
-            task_result: Task = response.result
+            outcome["error"] = (
+                f"A2A Error: {actual_error.code} - {actual_error.message}"
+            )
+        elif isinstance(
+            root_response_part, SendMessageSuccessResponse
+        ):  # Check if it's a success response
+            task_result: A2ATask = root_response_part.result  # result is of type Task
             sim_logger.info(
                 f"A2A Task {task_result.id} completed with state: {task_result.status.state}"
             )
 
             result_data = None
-            trade_decision_artifact = next(
-                (
-                    a
-                    for a in task_result.artifacts
-                    if a.name == TRADE_DECISION_ARTIFACT_NAME
-                ),
-                None,
-            )
+            if task_result.artifacts:
+                trade_decision_artifact = next(
+                    (
+                        a
+                        for a in task_result.artifacts
+                        if a.name == TRADE_DECISION_ARTIFACT_NAME
+                    ),
+                    None,
+                )
 
-            if trade_decision_artifact and trade_decision_artifact.parts:
-                art_part = trade_decision_artifact.parts[0]
-                if isinstance(art_part, DataPart):
-                    result_data = art_part.data
-                    sim_logger.info(f"  >> Extracted Result Data: {result_data}")
+                if trade_decision_artifact and trade_decision_artifact.parts:
+                    art_part_root = trade_decision_artifact.parts[
+                        0
+                    ].root  # Access root of Part Union
+                    if isinstance(art_part_root, A2ADataPart):
+                        result_data = art_part_root.data
+                        sim_logger.info(f"  >> Extracted Result Data: {result_data}")
+                    else:
+                        sim_logger.warning(
+                            f"  >> Unexpected part type in artifact: {type(art_part_root)}"
+                        )
                 else:
                     sim_logger.warning(
-                        f"  >> Unexpected part type in artifact: {type(art_part)}"
+                        "  >> 'trade_decision' artifact not found or empty."
                     )
+                    if task_result.status.message and task_result.status.message.parts:
+                        status_text_part_root = task_result.status.message.parts[0].root
+                        # Check if it's TextPart or DataPart with text
+                        if (
+                            isinstance(status_text_part_root, A2ADataPart)
+                            and "text" in status_text_part_root.data
+                        ):
+                            sim_logger.info(
+                                f"  >> Status Text: '{status_text_part_root.data['text']}'"
+                            )
+                        # Add similar check for a2a.types.TextPart if that's a possibility
             else:
-                sim_logger.warning("  >> 'trade_decision' artifact not found or empty.")
-                if task_result.status.message and task_result.status.message.parts:
-                    if isinstance(task_result.status.message.parts[0], TextPart):
-                        sim_logger.info(
-                            f"  >> Status Text: '{task_result.status.message.parts[0].text}'"
-                        )
+                sim_logger.warning("  >> No artifacts found in A2A task result.")
 
             if result_data and isinstance(result_data, dict):
                 outcome["reason"] = result_data.get("reason", "Reason not provided.")
                 if result_data.get("approved") is True:
                     outcome["approved_trade"] = result_data.get(
-                        "trade_proposal", result_data
+                        "trade_proposal",
+                        result_data,  # Fallback to result_data if no specific proposal key
                     )
                     sim_logger.info(
                         f"    >>> Approved Trade: {outcome['approved_trade']} (Reason: {outcome['reason']})"
@@ -457,31 +497,57 @@ async def _call_alphabot_a2a(
                     sim_logger.info(
                         f"    >>> Rejected Trade: {outcome['rejected_trade']} (Reason: {outcome['reason']})"
                     )
-                else:
+                else:  # Handle cases where 'approved' key is missing but we have other status info
                     sim_logger.info(
-                        f"  >> Received status update: {result_data.get('status', 'Unknown')}"
+                        f"  >> Received status update from AlphaBot: {result_data.get('status', 'Unknown status')}"
                     )
+                    # If there's a general message in result_data, use it as reason
+                    if "message" in result_data:
+                        outcome["reason"] = result_data["message"]
+
+            elif (
+                task_result.status.message and task_result.status.message.parts
+            ):  # If no artifact data, check status message
+                status_text_part_root = task_result.status.message.parts[0].root
+                if (
+                    isinstance(status_text_part_root, A2ADataPart)
+                    and "text" in status_text_part_root.data
+                ):
+                    outcome["reason"] = status_text_part_root.data["text"]
+                    sim_logger.info(
+                        f"  >> Reason from status message: {outcome['reason']}"
+                    )
+                # Add similar check for a2a.types.TextPart if relevant
+
             else:
                 sim_logger.warning(
-                    "A2A response lacked expected result data structure."
+                    "A2A response lacked expected result data structure or conclusive status message."
                 )
-                outcome["error"] = "A2A Response Format Issue"
-        else:
-            sim_logger.error("A2A response had no result or error.")
-            outcome["error"] = "Invalid A2A Response"
+                outcome["error"] = "A2A Response Format Issue or No Decision"
+        else:  # Neither error nor a Task result
+            sim_logger.error(
+                f"A2A response was not a Task or an error: {response.model_dump_json(exclude_none=True)}"
+            )
+            outcome["error"] = "Invalid A2A Response Type"
 
-    except httpx.ConnectError as http_err:
-        sim_logger.error(f"ConnectError to AlphaBot: {http_err}")
-        outcome["error"] = f"AlphaBot Connection Failed: {http_err}"
-        raise ConnectionError(f"AlphaBot Conn Fail: {http_err}") from http_err
-    except httpx.RequestError as req_err:
-        sim_logger.error(f"RequestError to AlphaBot: {req_err}")
-        outcome["error"] = f"AlphaBot Request Failed: {req_err}"
-        raise ConnectionError(f"AlphaBot Req Fail: {req_err}") from req_err
+    except A2AClientHTTPError as http_err:
+        sim_logger.error(
+            f"A2A HTTP Error to AlphaBot: {http_err.status_code} - {http_err.message}"
+        )
+        outcome["error"] = (
+            f"AlphaBot Connection/HTTP Error: {http_err.status_code} - {http_err.message}"
+        )
+        # Re-raise as ConnectionError for the main simulation loop to catch it distinctly if needed
+        raise ConnectionError(
+            f"AlphaBot A2A HTTP Error: {http_err.message}"
+        ) from http_err
+    except A2AClientJSONError as json_err:
+        sim_logger.error(f"A2A JSON Error from AlphaBot: {json_err.message}")
+        outcome["error"] = f"AlphaBot JSON Response Error: {json_err.message}"
+        # Not re-raising, allow outcome to be returned.
     except Exception as e:
-        sim_logger.error(f"A2A Client/Processing Error: {e}", exc_info=True)
+        sim_logger.error(f"General A2A Client/Processing Error: {e}", exc_info=True)
         outcome["error"] = f"A2A Processing Error: {e}"
-
     return outcome
 
 
@@ -513,198 +579,203 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             initial_price=params["sim_initial_price"],
             volatility=params["sim_volatility"],
             trend=params["sim_trend"],
-            history_size=params["alphabot_long_sma"] + 20,
+            history_size=params["alphabot_long_sma"]
+            + 20,  # Ensure enough history for longest SMA
         )
 
         alphabot_url = params.get(
             "alphabot_url",
             os.environ.get("ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL),
-        )
+        ).rstrip(
+            "/"
+        )  # Ensure no trailing slash for A2AClient
         sim_logger.info(f"Using AlphaBot Service URL: {alphabot_url}")
-        sim_logger.info(f"Instantiating A2AClient for AlphaBot at: {alphabot_url}")
-        try:
-            client = A2AClient(url=alphabot_url)
-        except Exception as e:
-            sim_logger.error(f"Failed to initialize A2AClient for AlphaBot: {e}")
-            raise ConnectionError(
-                f"Could not connect or initialize A2A client for AlphaBot at {alphabot_url}"
-            ) from e
 
-        a2a_session_id = f"sim-session-{uuid.uuid4().hex[:8]}"
-        sim_logger.info(f"Using A2A Session ID: {a2a_session_id}")
+        # The A2AClient needs an httpx.AsyncClient. Manage its lifecycle.
+        async with httpx.AsyncClient() as http_client:
+            try:
+                a2a_client = A2AClient(httpx_client=http_client, url=alphabot_url)
+                # Optionally, could try to fetch agent card here to verify connection early
+                # await a2a_client.get_client_from_agent_card_url(http_client, alphabot_url.rsplit('/',1)[0] if '/' in alphabot_url else alphabot_url)
+            except Exception as e:  # More specific httpx errors could be caught
+                sim_logger.error(
+                    f"Failed to initialize A2AClient for AlphaBot at {alphabot_url}: {e}"
+                )
+                raise ConnectionError(
+                    f"Could not connect or initialize A2A client for AlphaBot at {alphabot_url}"
+                ) from e
 
-        initial_portfolio_str = f"Initial Portfolio: {portfolio}"
-        sim_logger.info(initial_portfolio_str)
-        signals.append({"day": 0, "log": initial_portfolio_str})
+            a2a_session_id = f"sim-session-{uuid.uuid4().hex[:8]}"
+            sim_logger.info(f"Using A2A Session ID (contextId): {a2a_session_id}")
 
-        total_days = params["sim_days"]
-        sim_logger.info(f"Starting simulation loop for {total_days} days...")
+            initial_portfolio_str = f"Initial Portfolio: {portfolio}"
+            sim_logger.info(initial_portfolio_str)
+            signals.append({"day": 0, "log": initial_portfolio_str})
 
-        for day in range(1, total_days + 1):
-            sim_logger.info(f"===== Day {day} =====")
-            current_price = market_sim.next_price()
-            historical_prices = market_sim.get_historical_prices()
-            sim_logger.info(f"Market Data: Price = {format_currency(current_price)}")
+            total_days = params["sim_days"]
+            sim_logger.info(f"Starting simulation loop for {total_days} days...")
 
-            # Calculate SMAs
-            sma_short = calculate_sma(historical_prices, params["alphabot_short_sma"])
-            sma_long = calculate_sma(historical_prices, params["alphabot_long_sma"])
-
-            portfolio.update_valuation(current_price)
-            sim_logger.info(f"Portfolio (Start Day {day}): {portfolio}")
-
-            # Store daily state BEFORE A2A call/trade
-            daily_results.append(
-                {
-                    "Day": day,
-                    "Price": current_price,
-                    "SMA_Short": sma_short,
-                    "SMA_Long": sma_long,
-                    "Cash": portfolio.cash,
-                    "Shares": portfolio.shares,
-                    "HoldingsValue": portfolio.holdings_value,
-                    "TotalValue": portfolio.total_value,
-                }
-            )
-
-            a2a_outcome = await _call_alphabot_a2a(
-                client=client,
-                session_id=a2a_session_id,
-                day=day,
-                current_price=current_price,
-                historical_prices=historical_prices,
-                portfolio=portfolio,
-                params=params,
-                sim_logger=sim_logger,
-            )
-
-            approved_trade = a2a_outcome["approved_trade"]
-            rejected_trade = a2a_outcome["rejected_trade"]
-            reason_text = a2a_outcome["reason"]
-            a2a_error = a2a_outcome["error"]
-
-            trade_details = approved_trade or rejected_trade
-            is_approved = approved_trade is not None
-            action = trade_details.get("action") if trade_details else None
-
-            signal_log_entry = {
-                "day": day,
-                "log": f"Price={format_currency(current_price)}",
-            }
-
-            if a2a_error:
-                signal_log_entry["log"] += f" | A2A ERROR: {a2a_error}"
-                sim_logger.error(f"A2A Error on day {day}: {a2a_error}")
-
-            elif trade_details:
-                qty = trade_details.get("quantity")
-                price = trade_details.get("price")
-                ticker = trade_details.get("ticker", "N/A")
-                status = "Approved" if is_approved else "Rejected"
-                reason = reason_text or (
-                    "OK" if is_approved else "Reason not captured."
+            for day in range(1, total_days + 1):
+                sim_logger.info(f"===== Day {day} =====")
+                current_price = market_sim.next_price()
+                historical_prices = market_sim.get_historical_prices()
+                sim_logger.info(
+                    f"Market Data: Price = {format_currency(current_price)}"
                 )
 
-                signal_log_entry[
-                    "log"
-                ] += f" | {action} {qty} {ticker} @ {format_currency(price)} | {status}: {reason}"
+                sma_short = calculate_sma(
+                    historical_prices, params["alphabot_short_sma"]
+                )
+                sma_long = calculate_sma(historical_prices, params["alphabot_long_sma"])
 
-                if action == "BUY":
-                    if is_approved:
-                        approved_buy_days.append(day)
-                        approved_buy_prices.append(current_price)
-                    else:
-                        rejected_buy_days.append(day)
-                        rejected_buy_prices.append(current_price)
-                elif action == "SELL":
-                    if is_approved:
-                        approved_sell_days.append(day)
-                        approved_sell_prices.append(current_price)
-                    else:
-                        rejected_sell_days.append(day)
-                        rejected_sell_prices.append(current_price)
+                portfolio.update_valuation(current_price)
+                sim_logger.info(f"Portfolio (Start Day {day}): {portfolio}")
 
-                if is_approved:
-                    sim_logger.info(
-                        f"--- Executing Approved Trade: {action} {qty} @ {price} ---"
+                daily_results.append(
+                    {
+                        "Day": day,
+                        "Price": current_price,
+                        "SMA_Short": sma_short,
+                        "SMA_Long": sma_long,
+                        "Cash": portfolio.cash,
+                        "Shares": portfolio.shares,
+                        "HoldingsValue": portfolio.holdings_value,
+                        "TotalValue": portfolio.total_value,
+                    }
+                )
+
+                a2a_outcome = await _call_alphabot_a2a(
+                    client=a2a_client,
+                    session_id=a2a_session_id,
+                    day=day,
+                    current_price=current_price,
+                    historical_prices=historical_prices,
+                    portfolio=portfolio,
+                    params=params,
+                    sim_logger=sim_logger,
+                )
+
+                approved_trade = a2a_outcome["approved_trade"]
+                rejected_trade = a2a_outcome["rejected_trade"]
+                reason_text = a2a_outcome["reason"]
+                a2a_error = a2a_outcome["error"]
+
+                trade_details = approved_trade or rejected_trade
+                is_approved = approved_trade is not None
+                action = trade_details.get("action") if trade_details else None
+
+                signal_log_entry = {
+                    "day": day,
+                    "log": f"Price={format_currency(current_price)}",
+                }
+
+                if a2a_error:
+                    signal_log_entry["log"] += f" | A2A ERROR: {a2a_error}"
+                    sim_logger.error(f"A2A Error on day {day}: {a2a_error}")
+                elif trade_details:
+                    qty = trade_details.get("quantity")
+                    price = trade_details.get("price")
+                    ticker = trade_details.get("ticker", "N/A")
+                    status = "Approved" if is_approved else "Rejected"
+                    reason_from_outcome = reason_text or (
+                        "OK" if is_approved else "Reason not captured."
                     )
-                    exec_action = trade_details.get("action")
-                    exec_qty = trade_details.get("quantity")
-                    exec_price = trade_details.get("price")
+                    signal_log_entry[
+                        "log"
+                    ] += f" | {action} {qty} {ticker} @ {format_currency(price)} | {status}: {reason_from_outcome}"
 
-                    if exec_action and exec_qty is not None and exec_price is not None:
-                        # Convert string action to TradeAction enum
-                        trade_action_enum: Optional[TradeAction] = None
-                        if exec_action.upper() == "BUY":
-                            trade_action_enum = TradeAction.BUY
-                        elif exec_action.upper() == "SELL":
-                            trade_action_enum = TradeAction.SELL
-
-                        if trade_action_enum:
-                            trade_executed = portfolio.execute_trade(
-                                action=trade_action_enum,
-                                quantity=exec_qty,
-                                price=exec_price,
-                            )
-                            if trade_executed:
-                                portfolio.update_valuation(current_price)
-                                sim_logger.info(
-                                    f"Portfolio (Post-Trade Day {day}): {portfolio}"
-                                )
-                                signal_log_entry["log"] += " | Executed."
-                            else:
-                                sim_logger.warning(
-                                    "--- Trade Execution FAILED (Insufficient funds/shares?) ---"
-                                )
-                                sim_logger.info(
-                                    f"Portfolio (Post-Failed Trade Day {day}): {portfolio}"
-                                )
-                                signal_log_entry["log"] += " | Execution FAILED."
+                    if action == "BUY":
+                        if is_approved:
+                            approved_buy_days.append(day)
+                            approved_buy_prices.append(current_price)
                         else:
-                            # Log error if action string is not recognized
+                            rejected_buy_days.append(day)
+                            rejected_buy_prices.append(current_price)
+                    elif action == "SELL":
+                        if is_approved:
+                            approved_sell_days.append(day)
+                            approved_sell_prices.append(current_price)
+                        else:
+                            rejected_sell_days.append(day)
+                            rejected_sell_prices.append(current_price)
+
+                    if is_approved:
+                        sim_logger.info(
+                            f"--- Executing Approved Trade: {action} {qty} @ {price} ---"
+                        )
+                        exec_action = trade_details.get("action")
+                        exec_qty = trade_details.get("quantity")
+                        exec_price = trade_details.get("price")
+
+                        if (
+                            exec_action
+                            and exec_qty is not None
+                            and exec_price is not None
+                        ):
+                            trade_action_enum: Optional[TradeAction] = None
+                            if exec_action.upper() == "BUY":
+                                trade_action_enum = TradeAction.BUY
+                            elif exec_action.upper() == "SELL":
+                                trade_action_enum = TradeAction.SELL
+
+                            if trade_action_enum:
+                                trade_executed = portfolio.execute_trade(
+                                    action=trade_action_enum,
+                                    quantity=exec_qty,
+                                    price=exec_price,
+                                )
+                                if trade_executed:
+                                    portfolio.update_valuation(current_price)
+                                    sim_logger.info(
+                                        f"Portfolio (Post-Trade Day {day}): {portfolio}"
+                                    )
+                                    signal_log_entry["log"] += " | Executed."
+                                else:
+                                    sim_logger.warning(
+                                        "--- Trade Execution FAILED (Insufficient funds/shares?) ---"
+                                    )
+                                    signal_log_entry["log"] += " | Execution FAILED."
+                            else:
+                                sim_logger.error(
+                                    f"--- Trade Execution SKIPPED - Unknown action '{exec_action}' ---"
+                                )
+                                signal_log_entry[
+                                    "log"
+                                ] += f" | Execution SKIPPED (Unknown Action: {exec_action})."
+                        else:
                             sim_logger.error(
-                                f"--- Trade Execution SKIPPED - Unknown action '{exec_action}' received from AlphaBot ---"
+                                f"--- Trade Execution SKIPPED - Missing details: {trade_details} ---"
                             )
                             signal_log_entry[
                                 "log"
-                            ] += (
-                                f" | Execution SKIPPED (Unknown Action: {exec_action})."
-                            )
-                            sim_logger.info(
-                                f"Portfolio (Skipped Trade Day {day}): {portfolio}"
-                            )
-                    else:
-                        sim_logger.error(
-                            f"--- Trade Execution SKIPPED - Missing details in approved_trade: {trade_details} ---"
-                        )
-                        signal_log_entry[
-                            "log"
-                        ] += " | Execution SKIPPED (Missing Data)."
+                            ] += " | Execution SKIPPED (Missing Data)."
                         sim_logger.info(
-                            f"Portfolio (Skipped Trade Day {day}): {portfolio}"
+                            f"Portfolio (After {action} attempt Day {day}): {portfolio}"
                         )
+                    else:  # Trade was rejected
+                        sim_logger.info(
+                            f"--- Trade Rejected: {action} {qty} @ {price} (Reason: {reason_from_outcome}) ---"
+                        )
+                        sim_logger.info(
+                            f"Portfolio (Rejected Trade Day {day}): {portfolio}"
+                        )
+                else:  # No trade_details and no A2A error means no trade was proposed
+                    signal_log_entry[
+                        "log"
+                    ] += f" | No trade proposed by AlphaBot. Reason: {reason_text or 'N/A'}"
+                    sim_logger.info(f"Portfolio (No Trade Day {day}): {portfolio}")
 
-                else:  # Trade was rejected
-                    sim_logger.info(
-                        f"--- Trade Rejected: {action} {qty} @ {price} (Reason: {reason}) ---"
-                    )
-                    sim_logger.info(
-                        f"Portfolio (Rejected Trade Day {day}): {portfolio}"
-                    )
-
-            else:
-                signal_log_entry["log"] += " | No trade proposed."
-                sim_logger.info(f"Portfolio (No Trade Day {day}): {portfolio}")
-
-            signals.append(signal_log_entry)
+                signals.append(signal_log_entry)
+        # End of httpx.AsyncClient context manager
 
         sim_logger.info("--- Simulation End ---")
         sim_logger.info(f"Final Portfolio: {portfolio}")
         signals.append({"day": total_days + 1, "log": f"Final Portfolio: {portfolio}"})
 
-        sim_logger.info("Preparing results dataframe and charts...")
-        if not daily_results:
-            results_df = pd.DataFrame(
+        results_df = (
+            pd.DataFrame(daily_results).set_index("Day")
+            if daily_results
+            else pd.DataFrame(
                 columns=[
                     "Day",
                     "Price",
@@ -716,9 +787,7 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
                     "TotalValue",
                 ]
             ).set_index("Day")
-        else:
-            results_df = pd.DataFrame(daily_results).set_index("Day")
-
+        )
         trade_markers = {
             "approved_buy_days": approved_buy_days,
             "approved_buy_prices": approved_buy_prices,
@@ -729,14 +798,11 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             "rejected_sell_days": rejected_sell_days,
             "rejected_sell_prices": rejected_sell_prices,
         }
-
         fig = _create_results_figure(results_df, params, trade_markers)
         charts = {"combined_chart_json": fig.to_json()}
-
         signals_log = "\n".join([f"Day {s['day']}: {s['log']}" for s in signals])
         detailed_log = "\n".join(sim_log_list)
 
-        sim_logger.info("Simulation completed successfully.")
         return {
             "success": True,
             "final_portfolio": portfolio.__dict__,
@@ -745,8 +811,8 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             "detailed_log": detailed_log,
         }
 
-    except ConnectionError as ce:
-        error_msg = f"Connection Error: {ce}. Ensure AlphaBot A2A server is running at the specified URL."
+    except ConnectionError as ce:  # Catch ConnectionError raised by _call_alphabot_a2a
+        error_msg = f"Connection Error: {ce}. Ensure AlphaBot A2A server is running and accessible."
         logger.error(error_msg)
         sim_logger.error(error_msg)
         return {
@@ -754,8 +820,19 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             "error": error_msg,
             "detailed_log": "\n".join(sim_log_list),
         }
-    except Exception as e:
-        error_msg = f"Simulation Error: {e}"
+    except (
+        httpx.ConnectError
+    ) as connect_err:  # Catch direct httpx connect errors if A2AClient setup itself fails
+        error_msg = f"Failed to connect to AlphaBot service at {alphabot_url}: {connect_err}. Ensure AlphaBot is running."
+        logger.error(error_msg)
+        sim_logger.error(error_msg)
+        return {
+            "success": False,
+            "error": error_msg,
+            "detailed_log": "\n".join(sim_log_list),
+        }
+    except Exception as e:  # General fallback for other unexpected errors
+        error_msg = f"Unexpected Simulation Error: {e}"
         logger.error(error_msg, exc_info=True)
         sim_logger.error(error_msg, exc_info=True)
         return {
@@ -782,10 +859,14 @@ async def read_root(request: Request) -> HTMLResponse:
         "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
         "DEFAULT_ALPHABOT_URL": os.environ.get(
             "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
-        ),
+        ).rstrip(
+            "/"
+        ),  # Ensure no trailing slash for UI default
         "DEFAULT_RISKGUARD_URL": os.environ.get(
             "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
-        ),
+        ).rstrip(
+            "/"
+        ),  # Ensure no trailing slash
         "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
         "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
         "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,
@@ -851,7 +932,7 @@ class SimulationRunParams(BaseModel):
         ge=0,
         description="Maximum position size allowed by RiskGuard (must be >= 0).",
     )
-    riskguard_max_concentration: int = Field(
+    riskguard_max_concentration: int = Field(  # Input as int 0-100 from form
         int(defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION * 100),
         ge=0,
         le=100,
@@ -862,6 +943,9 @@ class SimulationRunParams(BaseModel):
     )
 
     def to_dict(self) -> Dict[str, Any]:
+        # Convert concentration back to float 0.0-1.0 for internal use if needed,
+        # but the agent/tool might expect it directly as passed by metadata.
+        # For now, keep as is, ensure AlphaBot's tool handles the percentage if necessary.
         return self.model_dump()
 
 
@@ -875,12 +959,16 @@ async def handle_run_simulation(
     sim_initial_price: float = Form(defaults.DEFAULT_SIM_INITIAL_PRICE),
     sim_volatility: float = Form(defaults.DEFAULT_SIM_VOLATILITY),
     sim_trend: float = Form(defaults.DEFAULT_SIM_TREND),
-    riskguard_url: str = Form(defaults.DEFAULT_RISKGUARD_URL),
+    riskguard_url: str = Form(
+        os.environ.get("RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL)
+    ),  # Get from env or default
     riskguard_max_pos_size: float = Form(defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE),
-    riskguard_max_concentration: int = Form(
+    riskguard_max_concentration: int = Form(  # Input as int
         int(defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION * 100)
     ),
-    alphabot_url: str = Form(defaults.DEFAULT_ALPHABOT_URL),
+    alphabot_url: str = Form(
+        os.environ.get("ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL)
+    ),  # Get from env or default
 ):
     """Handles the simulation run request, validating parameters via Pydantic."""
     if simulation_status["is_running"]:
@@ -905,30 +993,42 @@ async def handle_run_simulation(
             sim_initial_price=sim_initial_price,
             sim_volatility=sim_volatility,
             sim_trend=sim_trend,
-            riskguard_url=riskguard_url,
+            riskguard_url=riskguard_url.rstrip("/"),  # Ensure no trailing slash
             riskguard_max_pos_size=riskguard_max_pos_size,
             riskguard_max_concentration=riskguard_max_concentration,
-            alphabot_url=alphabot_url,
+            alphabot_url=alphabot_url.rstrip("/"),  # Ensure no trailing slash
         )
         params_dict = sim_params.to_dict()
-    except Exception as e:
+    except ValidationError as e:
         logger.error(f"Simulation parameter validation failed: {e}")
         simulation_status["message"] = f"Invalid simulation parameters: {e}"
         simulation_status["is_error"] = True
         simulation_status["is_running"] = False
-        simulation_status["params"] = {
+        # Capture current form values for repopulation, excluding Pydantic models and error
+        form_values = {
             k: v
             for k, v in locals().items()
-            if k != "sim_params" and k != "params_dict" and k != "e"
+            if k in SimulationRunParams.model_fields
+            and k not in ["sim_params", "params_dict", "e", "request", "results"]
         }
+        simulation_status["params"] = form_values
+        return RedirectResponse("/", status_code=303)
+    except Exception as e:  # Catch other unexpected errors during param processing
+        logger.error(f"Unexpected error processing parameters: {e}", exc_info=True)
+        simulation_status["message"] = f"Error processing parameters: {e}"
+        simulation_status["is_error"] = True
+        simulation_status["is_running"] = False
+        form_values = {
+            k: v
+            for k, v in locals().items()
+            if k in SimulationRunParams.model_fields
+            and k not in ["sim_params", "params_dict", "e", "request", "results"]
+        }
+        simulation_status["params"] = form_values
         return RedirectResponse("/", status_code=303)
 
     simulation_status["params"] = params_dict
-
     logger.info(f"Received simulation request with validated params: {params_dict}")
-    logger.info(
-        f"  >> handle_run_simulation: riskguard_max_pos_size = {params_dict['riskguard_max_pos_size']}"
-    )
 
     results = await run_simulation_async(params_dict)
 
@@ -941,7 +1041,7 @@ async def handle_run_simulation(
             f"Simulation failed: {results.get('error', 'Unknown error')}"
         )
         simulation_status["is_error"] = True
-        simulation_status["results"] = {
+        simulation_status["results"] = {  # Ensure results dict exists for log display
             "detailed_log": results.get("detailed_log", "No detailed log available.")
         }
 
@@ -956,15 +1056,17 @@ if __name__ == "__main__":
     logger.info("--- Starting FastAPI server for Simulator UI ---")
     logger.info("Ensure dependent A2A services are running:")
     logger.info(
-        f"  RiskGuard: python -m agentic_trading.riskguard --port {defaults.DEFAULT_RISKGUARD_PORT}"
+        f"  RiskGuard: python -m riskguard --port {defaults.DEFAULT_RISKGUARD_URL.split(':')[-1]}"
     )
     logger.info(
-        f"  AlphaBot:  python -m agentic_trading.alphabot --port {defaults.DEFAULT_ALPHABOT_PORT}"
+        f"  AlphaBot:  python -m alphabot --port {defaults.DEFAULT_ALPHABOT_URL.split(':')[-1]}"
     )
     logger.info("Required Environment Variables (if not using defaults):")
     logger.info(f"  RISKGUARD_SERVICE_URL (default: {defaults.DEFAULT_RISKGUARD_URL})")
     logger.info(f"  ALPHABOT_SERVICE_URL (default: {defaults.DEFAULT_ALPHABOT_URL})")
-    logger.info(f"--- Access UI at http://0.0.0.0:{DEFAULT_SIMULATOR_PORT} ---")
+    logger.info(
+        f"--- Access UI at http://0.0.0.0:{DEFAULT_SIMULATOR_PORT} ---"
+    )  # Using imported DEFAULT_SIMULATOR_PORT
 
     uvicorn.run(
         "simulator.main:app", host="0.0.0.0", port=DEFAULT_SIMULATOR_PORT, reload=True

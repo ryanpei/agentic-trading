@@ -1,13 +1,7 @@
 import json
 import logging
-from typing import AsyncGenerator, List
-
-# ADK Imports
-from google.adk.agents import BaseAgent
-from google.adk.agents.invocation_context import InvocationContext
-from google.adk.events import Event, EventActions
-from google.adk.tools import BaseTool
-from google.genai import types as genai_types
+import uuid
+from typing import Any, AsyncGenerator, Dict, List
 
 # Import defaults from the central config
 from common.config import (
@@ -21,14 +15,41 @@ from common.config import (
 )
 from common.utils.indicators import calculate_sma
 
+# ADK Imports
+from google.adk.agents import BaseAgent
+from google.adk.agents.invocation_context import InvocationContext
+from google.adk.events import Event, EventActions
+from google.adk.tools import BaseTool, ToolContext
+from google.genai import types as genai_types
+from pydantic import BaseModel, Field, ValidationError  # Import Pydantic
+
 from .a2a_risk_tool import A2ARiskCheckTool
 
 logger = logging.getLogger(__name__)
 
 
+# --- Pydantic Input Model for AlphaBot ---
+class PortfolioStateInput(BaseModel):
+    cash: float
+    shares: int
+    total_value: float
+
+
+class AlphaBotInput(BaseModel):
+    historical_prices: List[float]
+    current_price: float
+    portfolio_state: PortfolioStateInput  # Use the nested model
+    short_sma_period: int = Field(default=DEFAULT_ALPHABOT_SHORT_SMA)
+    long_sma_period: int = Field(default=DEFAULT_ALPHABOT_LONG_SMA)
+    trade_quantity: int = Field(default=DEFAULT_ALPHABOT_TRADE_QTY)
+    riskguard_url: str = Field(default=DEFAULT_RISKGUARD_URL)
+    max_pos_size: float = Field(default=DEFAULT_RISKGUARD_MAX_POS_SIZE)
+    max_concentration: float = Field(default=DEFAULT_RISKGUARD_MAX_CONCENTRATION)
+    day: int
+
+
 class AlphaBotAgent(BaseAgent):
     ticker: str
-    _should_be_long: bool = False
     tools: List[BaseTool]
 
     def __init__(
@@ -48,93 +69,81 @@ class AlphaBotAgent(BaseAgent):
             ticker=stock_ticker,
             **kwargs,
         )
-        self._should_be_long = False
+        logger.debug(f"[{self.name}] Initialized with ticker: {self.ticker}")
 
-    def _parse_and_validate_input(self, ctx: InvocationContext) -> dict | None:
-        """Parses input JSON and performs basic validation."""
-        logger.debug(f"[{self.name}] Parsing input context...")
+    def _parse_and_validate_input_pydantic(
+        self, ctx: InvocationContext
+    ) -> AlphaBotInput | None:
+        """Parses input JSON into AlphaBotInput Pydantic model."""
+        invocation_id_short = ctx.invocation_id[:8]
+        logger.debug(
+            f"[{self.name} ({invocation_id_short})] Attempting to parse input with Pydantic..."
+        )
         if (
             not ctx.user_content
             or not ctx.user_content.parts
             or not hasattr(ctx.user_content.parts[0], "text")
         ):
             logger.error(
-                f"[{self.name}] ERROR - Input event text not found in ctx.user_content.parts[0].text."
+                f"[{self.name} ({invocation_id_short})] ERROR - Input event text not found."
             )
             return None
 
         input_text = ctx.user_content.parts[0].text
         try:
-            input_data = json.loads(input_text)
-            logger.debug(f"[{self.name}] Parsed input_data: {input_data}")
-            return input_data
-        except json.JSONDecodeError:
+            input_payload = json.loads(input_text)
+            validated_input = AlphaBotInput(**input_payload)
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] Successfully parsed and validated input: {validated_input.model_dump(exclude={'historical_prices'})}"
+            )
+            logger.debug(
+                f"[{self.name} ({invocation_id_short})] Full validated input historical_prices count: {len(validated_input.historical_prices)}"
+            )
+            return validated_input
+        except json.JSONDecodeError as e:
             logger.error(
-                f"[{self.name}] ERROR - Failed to decode input JSON: {input_text[:100]}..."
+                f"[{self.name} ({invocation_id_short})] ERROR - Failed to decode input JSON: '{input_text[:200]}...'. Error: {e}"
+            )
+            return None
+        except ValidationError as e:
+            logger.error(
+                f"[{self.name} ({invocation_id_short})] ERROR - Input validation failed: {e}. Input was: '{input_text[:200]}...'"
             )
             return None
 
-    def _extract_parameters(self, input_data: dict) -> dict:
-        """Extracts strategy and risk parameters from input data, applying defaults."""
-        logger.debug(f"[{self.name}] Extracting parameters...")
-        params = {
-            "historical_prices": input_data.get("historical_prices", []),
-            "current_price": input_data.get("current_price", None),
-            "portfolio_state": input_data.get("portfolio_state", {}),
-            "short_sma_period": input_data.get(
-                "short_sma_period", DEFAULT_ALPHABOT_SHORT_SMA
-            ),
-            "long_sma_period": input_data.get(
-                "long_sma_period", DEFAULT_ALPHABOT_LONG_SMA
-            ),
-            "trade_quantity": input_data.get(
-                "trade_quantity", DEFAULT_ALPHABOT_TRADE_QTY
-            ),
-            "riskguard_url": input_data.get("riskguard_url", DEFAULT_RISKGUARD_URL),
-            "max_pos_size": input_data.get(
-                "max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE
-            ),
-            "max_concentration": input_data.get(
-                "max_concentration", DEFAULT_RISKGUARD_MAX_CONCENTRATION
-            ),
-        }
-        logger.debug(
-            f"[{self.name}] Using AlphaBot Params: short_sma={params['short_sma_period']}, "
-            f"long_sma={params['long_sma_period']}, trade_qty={params['trade_quantity']}"
-        )
-        logger.debug(
-            f"[{self.name}] Using RiskGuard Params: url={params['riskguard_url']}, "
-            f"max_pos={params['max_pos_size']}, max_conc={params['max_concentration']}"
-        )
-        logger.debug(
-            f"[{self.name}] Received historical_prices list with length: {len(params['historical_prices'])}"
-        )
-        return params
-
     def _calculate_indicators(
-        self, historical_prices: List[float], short_period: int, long_period: int
+        self,
+        historical_prices: List[float],
+        short_period: int,
+        long_period: int,
+        invocation_id: str,
     ) -> tuple[float | None, float | None, float | None, float | None]:
         """Calculates current and previous short/long SMAs."""
-        logger.debug(f"[{self.name}] Calculating indicators...")
+        logger.debug(
+            f"[{self.name} ({invocation_id[:8]})] Calculating indicators with "
+            f"short_period={short_period}, long_period={long_period}. "
+            f"Historical prices count: {len(historical_prices)}."
+        )
+
         sma_short = calculate_sma(historical_prices, short_period)
         sma_long = calculate_sma(historical_prices, long_period)
 
         prev_sma_short = None
         prev_sma_long = None
-        if len(historical_prices) > max(short_period, long_period):
+
+        if len(historical_prices) > 1:
             previous_prices = historical_prices[:-1]
-            prev_sma_short = calculate_sma(previous_prices, short_period)
-            prev_sma_long = calculate_sma(previous_prices, long_period)
+            if len(previous_prices) >= short_period:
+                prev_sma_short = calculate_sma(previous_prices, short_period)
+            if len(previous_prices) >= long_period:
+                prev_sma_long = calculate_sma(previous_prices, long_period)
 
-        if sma_short is not None and sma_long is not None:
-            logger.debug(
-                f"[{self.name}] Current SMA({short_period})={sma_short:.2f}, SMA({long_period})={sma_long:.2f}"
-            )
-        if prev_sma_short is not None and prev_sma_long is not None:
-            logger.debug(
-                f"[{self.name}] Previous SMA({short_period})={prev_sma_short:.2f}, SMA({long_period})={prev_sma_long:.2f}"
-            )
-
+        logger.info(
+            f"[{self.name} ({invocation_id[:8]})] SMAs: CurrShort={sma_short if sma_short is not None else 'N/A'}, "
+            f"CurrLong={sma_long if sma_long is not None else 'N/A'}, "
+            f"PrevShort={prev_sma_short if prev_sma_short is not None else 'N/A'}, "
+            f"PrevLong={prev_sma_long if prev_sma_long is not None else 'N/A'}"
+        )
         return sma_short, sma_long, prev_sma_short, prev_sma_long
 
     def _generate_signal(
@@ -143,53 +152,67 @@ class AlphaBotAgent(BaseAgent):
         sma_long: float | None,
         prev_sma_short: float | None,
         prev_sma_long: float | None,
+        invocation_id: str,
     ) -> str | None:
         """Generates BUY/SELL signal based on SMA crossover."""
-        logger.debug(f"[{self.name}] Generating signal...")
+        logger.debug(f"[{self.name} ({invocation_id[:8]})] Generating signal...")
         if (
             sma_short is None
             or sma_long is None
             or prev_sma_short is None
             or prev_sma_long is None
         ):
-            logger.info(f"[{self.name}] Not enough history for signal generation.")
+            logger.info(
+                f"[{self.name} ({invocation_id[:8]})] Not enough history for signal generation (one or more SMAs are None)."
+            )
             return None
 
         buy_cond1 = prev_sma_short <= prev_sma_long
         buy_cond2 = sma_short > sma_long
-        logger.debug(
-            f"[{self.name}] BUY Check: (Prev Short <= Prev Long) = {buy_cond1}, (Curr Short > Curr Long) = {buy_cond2}"
+        logger.info(
+            f"[{self.name} ({invocation_id[:8]})] BUY Check: (Prev Short {prev_sma_short:.2f} <= Prev Long {prev_sma_long:.2f}) = {buy_cond1}, "
+            f"(Curr Short {sma_short:.2f} > Curr Long {sma_long:.2f}) = {buy_cond2}"
         )
         if buy_cond1 and buy_cond2:
-            logger.info(f"[{self.name}] +++ BUY SIGNAL DETECTED +++")
+            logger.info(
+                f"[{self.name} ({invocation_id[:8]})] +++ BUY SIGNAL DETECTED +++"
+            )
             return "BUY"
 
         sell_cond1 = prev_sma_short >= prev_sma_long
         sell_cond2 = sma_short < sma_long
-        logger.debug(
-            f"[{self.name}] SELL Check: (Prev Short >= Prev Long) = {sell_cond1}, (Curr Short < Curr Long) = {sell_cond2}"
+        logger.info(
+            f"[{self.name} ({invocation_id[:8]})] SELL Check: (Prev Short {prev_sma_short:.2f} >= Prev Long {prev_sma_long:.2f}) = {sell_cond1}, "
+            f"(Curr Short {sma_short:.2f} < Curr Long {sma_long:.2f}) = {sell_cond2}"
         )
         if sell_cond1 and sell_cond2:
-            logger.info(f"[{self.name}] --- SELL SIGNAL DETECTED ---")
+            logger.info(
+                f"[{self.name} ({invocation_id[:8]})] --- SELL SIGNAL DETECTED ---"
+            )
             return "SELL"
 
-        logger.info(f"[{self.name}] No crossover signal conditions met.")
+        logger.info(
+            f"[{self.name} ({invocation_id[:8]})] No crossover signal conditions met."
+        )
         return None
 
     def _determine_trade_proposal(
         self,
         signal: str | None,
         current_price: float,
-        portfolio_state: dict,
+        portfolio_state: PortfolioStateInput,  # Use Pydantic model
         trade_quantity: int,
+        current_should_be_long: bool,
+        invocation_id: str,
     ) -> dict | None:
         """Determines the trade proposal based on signal and current state."""
-        logger.debug(
-            f"[{self.name}] Determining trade proposal for signal: {signal}, current state (_should_be_long): {self._should_be_long}"
+        logger.info(
+            f"[{self.name} ({invocation_id[:8]})] Determining trade proposal: Signal='{signal}', "
+            f"current_price=${current_price:.2f}, current_should_be_long={current_should_be_long}"
         )
         trade_proposal = None
         if signal == "BUY":
-            if not self._should_be_long:
+            if not current_should_be_long:
                 trade_proposal = {
                     "action": "BUY",
                     "ticker": self.ticker,
@@ -197,188 +220,229 @@ class AlphaBotAgent(BaseAgent):
                     "price": current_price,
                 }
                 logger.info(
-                    f"[{self.name}] Proposing {trade_proposal['action']} {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f} based on signal and not being long."
+                    f"[{self.name} ({invocation_id[:8]})] Proposing BUY {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f}"
                 )
             else:
                 logger.info(
-                    f"[{self.name}] BUY Signal ignored, already in desired long position."
-                )
-                logger.debug(
-                    f"[{self.name}] _determine_trade_proposal: BUY signal ignored because _should_be_long is True."
+                    f"[{self.name} ({invocation_id[:8]})] BUY Signal, but already long. No trade proposal."
                 )
         elif signal == "SELL":
-            if self._should_be_long:
-                current_shares = portfolio_state.get("shares", 0)
-                logger.debug(
-                    f"[{self.name}] _determine_trade_proposal: Agent thinks it should be long. Current shares: {current_shares}"
-                )
-                if current_shares > 0:
+            if current_should_be_long:
+                # portfolio_state is now PortfolioStateInput object
+                if portfolio_state.shares > 0:
                     trade_proposal = {
                         "action": "SELL",
                         "ticker": self.ticker,
-                        "quantity": current_shares,
+                        "quantity": portfolio_state.shares,  # Sell all
                         "price": current_price,
                     }
                     logger.info(
-                        f"[{self.name}] Proposing SELL {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f} based on signal and being long."
+                        f"[{self.name} ({invocation_id[:8]})] Proposing SELL {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f}"
                     )
                 else:
-                    self._should_be_long = False
-                    logger.warning(
-                        f"[{self.name}] SELL Signal, but no shares held. Correcting _should_be_long to False. No trade proposed."
+                    logger.info(
+                        f"[{self.name} ({invocation_id[:8]})] SELL Signal, state is long, but no shares held. No trade proposal."
                     )
             else:
                 logger.info(
-                    f"[{self.name}] SELL Signal ignored, already in desired short/flat position."
+                    f"[{self.name} ({invocation_id[:8]})] SELL Signal, but already flat/short. No trade proposal."
                 )
-                logger.debug(
-                    f"[{self.name}] _determine_trade_proposal: SELL signal ignored because _should_be_long is False."
-                )
+
+        if not trade_proposal:
+            logger.info(
+                f"[{self.name} ({invocation_id[:8]})] No trade proposal generated for signal '{signal}' and current_should_be_long={current_should_be_long}."
+            )
         return trade_proposal
 
     async def _perform_risk_check(
         self,
         trade_proposal: dict,
-        portfolio_state: dict,
-        risk_params: dict,
+        portfolio_state: PortfolioStateInput,  # Use Pydantic model
+        risk_params: dict,  # This contains riskguard_url, max_pos_size, max_concentration
         ctx: InvocationContext,
     ) -> dict | None:
         """Calls the A2A Risk Check tool and returns the result."""
-        logger.info(f"[{self.name}] Performing A2A Risk Check...")
+        invocation_id_short = ctx.invocation_id[:8]
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Performing A2A Risk Check for trade: {trade_proposal}"
+        )
 
         tool_args = {
             "trade_proposal": trade_proposal,
-            "portfolio_state": portfolio_state,
-            "risk_params": risk_params,
+            "portfolio_state": portfolio_state.model_dump(),  # Convert Pydantic to dict for tool
+            "risk_params": risk_params,  # Pass through extracted risk_params
         }
-        logger.debug(f"[{self.name}] A2A Tool Args: {tool_args}")
+        logger.debug(
+            f"[{self.name} ({invocation_id_short})] A2A Tool Args: {tool_args}"
+        )
 
         a2a_risk_tool_instance = next(
             (t for t in self.tools if isinstance(t, A2ARiskCheckTool)), None
         )
 
         if not a2a_risk_tool_instance:
-            logger.error(f"[{self.name}] ERROR - A2A Risk check tool not found.")
-            return None
+            logger.error(
+                f"[{self.name} ({invocation_id_short})] ERROR - A2A Risk check tool not found."
+            )
+            return {
+                "approved": False,
+                "reason": "Internal Error: Risk check tool misconfiguration.",
+            }
+
+        adk_tool_context = ToolContext(
+            invocation_context=ctx,
+            function_call_id=f"risk_check_{invocation_id_short}_{uuid.uuid4().hex[:4]}",
+        )
+        logger.debug(
+            f"[{self.name} ({invocation_id_short})] Created ToolContext for A2A tool call: {adk_tool_context.function_call_id}"
+        )
 
         tool_event_generator = a2a_risk_tool_instance.run_async(
-            args=tool_args, tool_context=ctx
+            args=tool_args, tool_context=adk_tool_context
         )
 
         risk_result = None
         async for tool_event in tool_event_generator:
+            logger.debug(
+                f"[{self.name} ({invocation_id_short})] Received event from A2A tool: {tool_event.author}"
+            )
             if tool_event.author == a2a_risk_tool_instance.name:
-                response_parts = tool_event.get_function_responses()
-                if response_parts:
-                    risk_result = response_parts[0].response
-                    logger.debug(f"[{self.name}] Extracted risk result: {risk_result}")
-                    break
+                if hasattr(tool_event, "get_function_responses") and callable(
+                    getattr(tool_event, "get_function_responses")
+                ):
+                    response_parts = tool_event.get_function_responses()
+                    if response_parts:
+                        risk_result = response_parts[0].response
+                        logger.info(
+                            f"[{self.name} ({invocation_id_short})] Extracted risk result: {risk_result}"
+                        )
+                        break
+                    else:
+                        logger.warning(
+                            f"[{self.name} ({invocation_id_short})] Warning - Event from {tool_event.author} did not contain FunctionResponse parts."
+                        )
                 else:
                     logger.warning(
-                        f"[{self.name}] Warning: Event from {tool_event.author} did not contain FunctionResponse parts."
+                        f"[{self.name} ({invocation_id_short})] Warning - Event from {tool_event.author} does not have 'get_function_responses' or it's not callable."
                     )
             else:
                 logger.debug(
-                    f"[{self.name}] Received intermediate event from author: {tool_event.author}"
+                    f"[{self.name} ({invocation_id_short})] Received intermediate/other event from author: {tool_event.author}"
                 )
 
         if risk_result is None:
             logger.error(
-                f"[{self.name}] Did not receive a valid result from A2A RiskGuard tool after iterating."
+                f"[{self.name} ({invocation_id_short})] Did not receive a valid result from A2A RiskGuard tool after iterating."
             )
-
+            return {
+                "approved": False,
+                "reason": "A2A Error: No response from RiskGuard tool.",
+            }
         return risk_result
 
     def _process_risk_result(
-        self, risk_result: dict, trade_proposal: dict, signal: str
+        self, risk_result: dict, trade_proposal: dict, signal: str, invocation_id: str
     ) -> Event:
-        """Processes the risk check result, updates state, and creates the final event."""
-        logger.debug(
-            f"[{self.name}] _process_risk_result: Received risk_result={risk_result}, Original signal='{signal}', Current _should_be_long={self._should_be_long}"
+        """
+        Processes the risk check result and creates the final event with state_delta.
+        """
+        invocation_id_short = invocation_id[:8]
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Processing risk result={risk_result}, "
+            f"trade_proposal={trade_proposal}, Original signal='{signal}'"
         )
-        logger.debug(f"[{self.name}] Processing risk result: {risk_result}")
         approved = risk_result.get("approved", False)
         reason = risk_result.get("reason", "No reason provided.")
-        logger.debug(
-            f"[{self.name}] _process_risk_result: Risk check approved={approved}. Reason='{reason}'"
-        )
+
+        state_delta_content = {}
+        new_should_be_long_value = None
 
         if approved:
-            logger.debug(
-                f"[{self.name}] _process_risk_result: Trade APPROVED. Updating _should_be_long based on signal '{signal}'."
-            )
             logger.info(
-                f"[{self.name}] Trade APPROVED by RiskGuard (via A2A). Reason: {reason}"
+                f"[{self.name} ({invocation_id_short})] Trade APPROVED by RiskGuard. Reason: {reason}"
             )
             if signal == "BUY":
-                self._should_be_long = True
+                new_should_be_long_value = True
             elif signal == "SELL":
-                self._should_be_long = False
-            logger.info(
-                f"[{self.name}] State updated: _should_be_long = {self._should_be_long}"
-            )
-            logger.debug(
-                f"[{self.name}] _process_risk_result: State updated to _should_be_long={self._should_be_long}"
-            )
-            final_event = Event(
-                author=self.name,
-                content=genai_types.Content(
-                    parts=[genai_types.Part(text=f"Trade Approved (A2A): {reason}")]
-                ),
-                actions=EventActions(state_delta={"approved_trade": trade_proposal}),
-            )
+                new_should_be_long_value = False
+
+            if new_should_be_long_value is not None:
+                state_delta_content["should_be_long"] = new_should_be_long_value
+                logger.debug(
+                    f"[{self.name} ({invocation_id_short})] Setting 'should_be_long' in state_delta to: {new_should_be_long_value}"
+                )
+            state_delta_content["approved_trade"] = trade_proposal
+            final_event_text = f"Trade Approved (A2A): {reason}"
         else:
             logger.info(
-                f"[{self.name}] Trade REJECTED by RiskGuard (via A2A). Reason: {reason}"
+                f"[{self.name} ({invocation_id_short})] Trade REJECTED by RiskGuard. Reason: {reason}"
             )
-            logger.debug(
-                f"[{self.name}] _process_risk_result: Trade REJECTED. State _should_be_long remains {self._should_be_long}."
-            )
-            logger.info(
-                f"[{self.name}] State unchanged: _should_be_long = {self._should_be_long}"
-            )
-            final_event = Event(
-                author=self.name,
-                content=genai_types.Content(
-                    parts=[genai_types.Part(text=f"Trade Rejected (A2A): {reason}")]
-                ),
-                actions=EventActions(
-                    state_delta={"rejected_trade_proposal": trade_proposal}
-                ),
-            )
-        return final_event
+            state_delta_content["rejected_trade_proposal"] = trade_proposal
+            final_event_text = f"Trade Rejected (A2A): {reason}"
+
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Final state_delta to be emitted: {state_delta_content}"
+        )
+        return Event(
+            author=self.name,
+            content=genai_types.Content(
+                parts=[genai_types.Part(text=final_event_text)]
+            ),
+            actions=EventActions(state_delta=state_delta_content),
+        )
 
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
-        logger.info(f"[{self.name} Agent] Running Check")
+        invocation_id_short = ctx.invocation_id[:8]
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] >>> Invocation START. Session ID: {ctx.session.id} <<<"
+        )
 
-        input_data = self._parse_and_validate_input(ctx)
-        if input_data is None:
+        current_should_be_long = ctx.session.state.get("should_be_long", False)
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Initial 'should_be_long' from session state: {current_should_be_long}"
+        )
+
+        validated_input = self._parse_and_validate_input_pydantic(ctx)
+        if validated_input is None:
+            logger.warning(
+                f"[{self.name} ({invocation_id_short})] Invalid input data (Pydantic). Yielding error event."
+            )
             yield Event(
                 author=self.name,
                 content=genai_types.Content(
-                    parts=[genai_types.Part(text="Error: Invalid input data.")]
+                    parts=[
+                        genai_types.Part(
+                            text="Error: Invalid input data structure or values."
+                        )
+                    ]
                 ),
+            )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (Invalid Input) <<<"
             )
             return
 
-        params = self._extract_parameters(input_data)
-        historical_prices = params["historical_prices"]
-        current_price = params["current_price"]
-        portfolio_state = params["portfolio_state"]
-        short_sma_period = params["short_sma_period"]
-        long_sma_period = params["long_sma_period"]
-        trade_quantity = params["trade_quantity"]
-        risk_params = {
-            "riskguard_url": params["riskguard_url"],
-            "max_pos_size": params["max_pos_size"],
-            "max_concentration": params["max_concentration"],
+        # Use validated_input fields directly
+        historical_prices = validated_input.historical_prices
+        current_price = validated_input.current_price
+        portfolio_state = (
+            validated_input.portfolio_state
+        )  # This is now PortfolioStateInput model
+        short_sma_period = validated_input.short_sma_period
+        long_sma_period = validated_input.long_sma_period
+        trade_quantity = validated_input.trade_quantity
+        # Risk params are now part of validated_input, passed to _perform_risk_check
+        risk_params_for_tool = {
+            "riskguard_url": validated_input.riskguard_url,
+            "max_pos_size": validated_input.max_pos_size,
+            "max_concentration": validated_input.max_concentration,
         }
 
         if not historical_prices or current_price is None:
             logger.warning(
-                f"[{self.name}] Insufficient market data after parameter extraction."
+                f"[{self.name} ({invocation_id_short})] Insufficient market data. Yielding event."
             )
             yield Event(
                 author=self.name,
@@ -390,63 +454,110 @@ class AlphaBotAgent(BaseAgent):
                     ]
                 ),
             )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (Insufficient Market Data) <<<"
+            )
             return
 
         sma_short, sma_long, prev_sma_short, prev_sma_long = self._calculate_indicators(
-            historical_prices, short_sma_period, long_sma_period
+            historical_prices, short_sma_period, long_sma_period, ctx.invocation_id
         )
         if sma_short is None or sma_long is None:
-            logger.info(f"[{self.name}] Not enough history for SMAs.")
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] Not enough history for current SMAs. Yielding event."
+            )
             yield Event(
                 author=self.name,
                 content=genai_types.Content(
                     parts=[genai_types.Part(text="No signal yet (calculating SMAs).")]
                 ),
             )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (Not enough history for SMAs) <<<"
+            )
             return
 
         signal = self._generate_signal(
-            sma_short, sma_long, prev_sma_short, prev_sma_long
+            sma_short, sma_long, prev_sma_short, prev_sma_long, ctx.invocation_id
         )
-        if signal is None:
-            reason = (
-                "Not enough history"
-                if (prev_sma_short is None or prev_sma_long is None)
-                else "Conditions not met"
-            )
-            logger.info(
-                f"[{self.name}] No signal generated this period. Reason: {reason}"
+
+        if signal == "SELL" and current_should_be_long and portfolio_state.shares == 0:
+            logger.warning(
+                f"[{self.name} ({invocation_id_short})] State Correction: SELL Signal, 'should_be_long' is True (from session), but no shares held. Correcting state."
             )
             yield Event(
                 author=self.name,
                 content=genai_types.Content(
-                    parts=[genai_types.Part(text=f"No signal ({reason}).")]
+                    parts=[
+                        genai_types.Part(
+                            text="State correction: Position was long as per session state, but no shares held on SELL signal. Corrected to flat/not long."
+                        )
+                    ]
                 ),
+                actions=EventActions(state_delta={"should_be_long": False}),
+            )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (State Corrected) <<<"
+            )
+            return
+
+        if signal is None:
+            reason_no_signal = (
+                "Not enough history for previous SMAs"
+                if (prev_sma_short is None or prev_sma_long is None)
+                and (sma_short is not None and sma_long is not None)
+                else "Conditions not met"
+            )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] No signal generated. Reason: {reason_no_signal}. Yielding event."
+            )
+            yield Event(
+                author=self.name,
+                content=genai_types.Content(
+                    parts=[genai_types.Part(text=f"No signal ({reason_no_signal}).")]
+                ),
+            )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (No Signal) <<<"
             )
             return
 
         trade_proposal = self._determine_trade_proposal(
-            signal, current_price, portfolio_state, trade_quantity
+            signal,
+            current_price,
+            portfolio_state,
+            trade_quantity,
+            current_should_be_long,
+            ctx.invocation_id,
         )
         if trade_proposal is None:
             logger.info(
-                f"[{self.name}] Signal ({signal}) generated, but no trade action needed based on current state."
+                f"[{self.name} ({invocation_id_short})] Signal ('{signal}') generated, but no trade action needed based on current_should_be_long={current_should_be_long}. Yielding event."
             )
             yield Event(
                 author=self.name,
                 content=genai_types.Content(
-                    parts=[genai_types.Part(text="Signal generated, no action needed.")]
+                    parts=[
+                        genai_types.Part(
+                            text="Signal generated, no action needed based on current strategy state."
+                        )
+                    ]
                 ),
+            )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (No Trade Proposal Needed) <<<"
             )
             return
 
-        # Yield event before calling the risk check tool
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Trade proposal generated: {trade_proposal}. Yielding informational event before risk check."
+        )
         yield Event(
             author=self.name,
             content=genai_types.Content(
                 parts=[
                     genai_types.Part(
-                        text=f"Proposing {trade_proposal['action']} {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f} (via A2A Risk Check)"
+                        text=f"Proposing {trade_proposal['action']} {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f} (pending A2A Risk Check)"
                     )
                 ]
             ),
@@ -455,11 +566,15 @@ class AlphaBotAgent(BaseAgent):
         risk_result = None
         try:
             risk_result = await self._perform_risk_check(
-                trade_proposal, portfolio_state, risk_params, ctx
+                trade_proposal,
+                portfolio_state,
+                risk_params_for_tool,
+                ctx,  # Pass Pydantic portfolio_state and extracted risk_params
             )
         except Exception as e:
             logger.error(
-                f"[{self.name}] Error during risk check tool call: {e}", exc_info=True
+                f"[{self.name} ({invocation_id_short})] Error during risk check tool call: {e}",
+                exc_info=True,
             )
             yield Event(
                 author=self.name,
@@ -467,9 +582,15 @@ class AlphaBotAgent(BaseAgent):
                     parts=[genai_types.Part(text="Error during risk check.")]
                 ),
             )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (Risk Check Error) <<<"
+            )
             return
 
         if risk_result is None:
+            logger.error(
+                f"[{self.name} ({invocation_id_short})] Risk check returned None unexpectedly. Yielding error event."
+            )
             yield Event(
                 author=self.name,
                 content=genai_types.Content(
@@ -480,13 +601,24 @@ class AlphaBotAgent(BaseAgent):
                     ]
                 ),
             )
+            logger.info(
+                f"[{self.name} ({invocation_id_short})] >>> Invocation END (Null Risk Result) <<<"
+            )
             return
 
-        final_event = self._process_risk_result(risk_result, trade_proposal, signal)
+        final_event = self._process_risk_result(
+            risk_result, trade_proposal, signal, ctx.invocation_id
+        )
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] Yielding final event: {final_event.content.parts[0].text if final_event.content and final_event.content.parts else 'No Content'}, StateDelta: {final_event.actions.state_delta if final_event.actions else 'No Actions'}"
+        )
         yield final_event
+        logger.info(
+            f"[{self.name} ({invocation_id_short})] >>> Invocation END (Processed) <<<"
+        )
 
 
 root_agent = AlphaBotAgent()
 logger.info(
-    "AlphaBot root_agent instance created (using real A2A tool). Parameters passed via metadata."
+    "AlphaBot root_agent instance created. State 'should_be_long' will be managed via ADK session."
 )
