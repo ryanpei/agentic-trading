@@ -1,24 +1,31 @@
 import logging
 
 import click
-
 import common.config as defaults
-from common.server import A2AServer
-from common.types import AgentCapabilities, AgentCard, AgentSkill, MissingAPIKeyError
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 
-# Import the specific Task Manager for AlphaBot
-from .task_manager import AlphaBotTaskManager
+# Import the specific AgentExecutor for AlphaBot
+from .agent_executor import AlphaBotAgentExecutor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 @click.command()
-@click.option("--host", default="127.0.0.1", help="Host to bind the server to.")
 @click.option(
-    "--port", default=defaults.DEFAULT_ALPHABOT_PORT, help="Port to bind the server to."
+    "--host",
+    default=defaults.DEFAULT_ALPHABOT_URL.split(":")[1].replace("//", ""),
+    help="Host to bind the server to.",
 )
-def main(host, port):
+@click.option(
+    "--port",
+    default=int(defaults.DEFAULT_ALPHABOT_URL.split(":")[2]),
+    help="Port to bind the server to.",
+)
+def main(host: str, port: int):
     """Runs the AlphaBot agent as an A2A server."""
     logger.info("Configuring AlphaBot A2A server...")
 
@@ -27,7 +34,7 @@ def main(host, port):
         agent_card = AgentCard(
             name="AlphaBot Agent",
             description="Trading agent that analyzes market data and portfolio state to propose trades.",
-            url=f"http://{host}:{port}/",
+            url=f"http://{host}:{port}",  # SDK expects URL without trailing slash for server itself
             version="1.0.0",
             capabilities=AgentCapabilities(
                 streaming=False,  # AlphaBotTaskManager doesn't support streaming
@@ -41,6 +48,7 @@ def main(host, port):
                     examples=[
                         "Given market data and portfolio, what trade should I make?"
                     ],
+                    tags=[],
                 )
             ],
             defaultInputModes=[
@@ -52,37 +60,34 @@ def main(host, port):
         logger.exception("Error creating AgentCard")
         raise
 
-    # Instantiate the AlphaBot Task Manager
+    # Instantiate the AlphaBot AgentExecutor
     try:
-        task_manager = AlphaBotTaskManager()
+        agent_executor = AlphaBotAgentExecutor()
     except Exception as e:
-        logger.exception("Error initializing AlphaBotTaskManager")
+        logger.exception("Error initializing AlphaBotAgentExecutor")
         raise
 
-    # Instantiate the A2A Server
+    # Instantiate the A2AStarletteApplication
+    task_store = InMemoryTaskStore()
+    request_handler = DefaultRequestHandler(
+        agent_executor=agent_executor, task_store=task_store
+    )
     try:
-        server = A2AServer(
+        app_builder = A2AStarletteApplication(
             agent_card=agent_card,
-            task_manager=task_manager,
-            host=host,
-            port=port,
+            http_handler=request_handler,
         )
     except Exception as e:
-        logger.exception("Error initializing A2AServer")
+        logger.exception("Error initializing A2AStarletteApplication")
         raise
 
     # Start the Server
+    import uvicorn
+
     logger.info(f"Starting AlphaBot A2A server on http://{host}:{port}/")
-    try:
-        server.start()
-    except MissingAPIKeyError as e:  # Tool dependency might require keys
-        logger.error(f"Configuration Error: {e}")
-        exit(1)  # Keep exit for critical config errors
-    except Exception as e:
-        logger.exception("An error occurred during server startup")
-        exit(1)  # Keep exit for critical startup errors
+    uvicorn.run(app_builder.build(), host=host, port=port)
 
 
 if __name__ == "__main__":
-    # Example: python -m agentic_trading.alphabot --port 8081
+    # Example: python -m alphabot --port 8081
     main()

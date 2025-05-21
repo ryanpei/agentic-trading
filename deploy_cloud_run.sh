@@ -45,7 +45,7 @@ gcloud artifacts repositories create $REPOSITORY_NAME \
     --repository-format=docker \
     --location=$REGION \
     --description="Docker repository for agentic trading services" \
-    --project=$PROJECT_ID || echo "Repository '$REPOSITORY_NAME' likely already exists."
+    --project=$PROJECT_ID || echo "Repository '$REPOSITORY_NAME' likely already exists in region '$REGION'."
 echo "---"
 
 # --- 1. Deploy RiskGuard ---

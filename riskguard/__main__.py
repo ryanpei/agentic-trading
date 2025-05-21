@@ -1,35 +1,39 @@
 import logging
 
 import click
-import uvicorn
-
 import common.config as defaults
-from common.server import A2AServer
-from common.types import AgentCapabilities, AgentCard, AgentSkill, MissingAPIKeyError
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 
 from .agent import root_agent as riskguard_adk_agent
-from .task_manager import RiskGuardTaskManager
+from .agent_executor import RiskGuardAgentExecutor  # Renamed from RiskGuardTaskManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 @click.command()
-@click.option("--host", default="127.0.0.1", help="Host to bind the server to.")
+@click.option(
+    "--host",
+    default=defaults.DEFAULT_RISKGUARD_URL.split(":")[1].replace("//", ""),
+    help="Host to bind the server to.",
+)
 @click.option(
     "--port",
-    default=defaults.DEFAULT_RISKGUARD_PORT,
+    default=int(defaults.DEFAULT_RISKGUARD_URL.split(":")[2]),
     help="Port to bind the server to.",
 )
-def main(host, port):
-    """Runs the RiskGuard ADK agent as a REAL A2A server."""
+def main(host: str, port: int):
+    """Runs the RiskGuard ADK agent as an A2A server."""
     logger.info(f"Configuring RiskGuard A2A server...")
 
     try:
         agent_card = AgentCard(
             name=riskguard_adk_agent.name,
             description=riskguard_adk_agent.description,
-            url=f"http://{host}:{port}/",
+            url=f"http://{host}:{port}",  # SDK expects URL without trailing slash for server itself
             version="1.1.0",
             capabilities=AgentCapabilities(
                 streaming=False,
@@ -41,6 +45,7 @@ def main(host, port):
                     name="Check Trade Risk",
                     description="Validates if a proposed trade meets risk criteria.",
                     examples=["Check if buying 100 TECH_STOCK at $150 is allowed."],
+                    tags=[],
                 )
             ],
             defaultInputModes=["data"],
@@ -53,32 +58,29 @@ def main(host, port):
         raise
 
     try:
-        task_manager = RiskGuardTaskManager()
+        agent_executor = RiskGuardAgentExecutor()
     except Exception as e:
-        logger.error(f"Error initializing RiskGuardTaskManager: {e}")
+        logger.error(f"Error initializing RiskGuardAgentExecutor: {e}")
         raise
 
+    task_store = InMemoryTaskStore()
+    request_handler = DefaultRequestHandler(
+        agent_executor=agent_executor, task_store=task_store
+    )
     try:
-        server = A2AServer(
+        app_builder = A2AStarletteApplication(
             agent_card=agent_card,
-            task_manager=task_manager,
-            host=host,
-            port=port,
+            http_handler=request_handler,
         )
     except Exception as e:
-        logger.error(f"Error initializing A2AServer: {e}")
+        logger.error(f"Error initializing A2AStarletteApplication: {e}")
         raise
 
     # Start the Server
+    import uvicorn
+
     logger.info(f"Starting RiskGuard A2A server on http://{host}:{port}/")
-    try:
-        server.start()
-    except MissingAPIKeyError as e:
-        logger.error(f"Configuration Error: {e}")
-        exit(1)
-    except Exception as e:
-        logger.error(f"An error occurred during server startup: {e}", exc_info=True)
-        exit(1)
+    uvicorn.run(app_builder.build(), host=host, port=port)
 
 
 if __name__ == "__main__":
