@@ -46,8 +46,8 @@ class AlphaBotAgentExecutor(AgentExecutor):
         if (
             not context.current_task
         ):  # Should be created by DefaultRequestHandler if not existing
-            task_updater.submit(message=context.message)  # Send initial message
-        task_updater.start_work(
+            await task_updater.submit(message=context.message)  # Send initial message
+        await task_updater.start_work(
             message=task_updater.new_agent_message(
                 parts=[
                     Part(root=DataPart(data={"status": "Processing trade signal..."}))
@@ -77,7 +77,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
             logger.error(
                 f"Task {context.task_id}: Missing market_data or portfolio_state. Extracted market_data: {market_data}, Extracted portfolio_state: {portfolio_state}. Input message parts: {context.message.parts if context.message else 'No message'}"
             )
-            task_updater.failed(
+            await task_updater.failed(
                 message=task_updater.new_agent_message(
                     parts=[
                         Part(
@@ -189,7 +189,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
             logger.error(
                 f"Task {context.task_id}: {error_message} Cannot proceed with ADK run."
             )
-            task_updater.failed(
+            await task_updater.failed(
                 message=task_updater.new_agent_message(
                     parts=[
                         Part(
@@ -258,17 +258,17 @@ class AlphaBotAgentExecutor(AgentExecutor):
                     "message": "Agent finished, unknown result format.",
                 }
 
-            task_updater.add_artifact(
+            await task_updater.add_artifact(
                 parts=[Part(root=DataPart(data=final_result_dict))],
                 name=DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME,
             )
-            task_updater.complete()
+            await task_updater.complete()
 
         except Exception as e:
             logger.exception(
                 f"Task {context.task_id}: Error running AlphaBot ADK agent: {e}"
             )
-            task_updater.failed(
+            await task_updater.failed(
                 message=task_updater.new_agent_message(
                     parts=[Part(root=DataPart(data={"error": f"ADK Agent error: {e}"}))]
                 )

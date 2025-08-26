@@ -36,8 +36,8 @@ class RiskGuardAgentExecutor(AgentExecutor):
         task_updater = TaskUpdater(event_queue, context.task_id, context.context_id)
 
         if not context.current_task:
-            task_updater.submit(message=context.message)
-        task_updater.start_work(
+            await task_updater.submit(message=context.message)
+        await task_updater.start_work(
             message=task_updater.new_agent_message(
                 parts=[Part(root=DataPart(data={"status": "Checking risk..."}))]
             )
@@ -59,7 +59,7 @@ class RiskGuardAgentExecutor(AgentExecutor):
             logger.error(
                 f"Task {context.task_id}: Missing 'trade_proposal' or 'portfolio_state'"
             )
-            task_updater.failed(
+            await task_updater.failed(
                 message=task_updater.new_agent_message(
                     parts=[Part(root=DataPart(data={"error": "Invalid input data"}))]
                 )
@@ -116,7 +116,7 @@ class RiskGuardAgentExecutor(AgentExecutor):
             logger.error(
                 f"Task {context.task_id}: {error_message} Cannot proceed with ADK run."
             )
-            task_updater.failed(
+            await task_updater.failed(
                 message=task_updater.new_agent_message(
                     parts=[
                         Part(
@@ -151,18 +151,18 @@ class RiskGuardAgentExecutor(AgentExecutor):
                             risk_result_dict = response_data
                             break  # Assuming the first function_response is the one we need.
 
-            task_updater.add_artifact(
+            await task_updater.add_artifact(
                 parts=[Part(root=DataPart(data=risk_result_dict))],
                 name="risk_assessment",
             )
-            task_updater.complete()
+            await task_updater.complete()
 
         except Exception as e:
             logger.error(
                 f"Error running RiskGuard ADK agent for task {context.task_id}: {e}",
                 exc_info=True,
             )
-            task_updater.failed(
+            await task_updater.failed(
                 message=task_updater.new_agent_message(
                     parts=[Part(root=DataPart(data={"error": f"ADK Agent error: {e}"}))]
                 )
