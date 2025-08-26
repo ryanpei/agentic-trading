@@ -358,7 +358,6 @@ async def _call_alphabot_a2a(
     Returns:
         A dictionary containing the outcome.
     """
-    a2a_task_id = f"sim-{session_id}-day{day}"  # This will be the taskId in the Message
 
     market_data_part_data = {
         "market_data": {
@@ -384,7 +383,6 @@ async def _call_alphabot_a2a(
 
     # Construct a2a.types.Message for the new SDK
     sdk_message = A2AMessage(
-        taskId=a2a_task_id,
         contextId=session_id,
         messageId=str(uuid.uuid4()),
         role=A2ARole.user,
@@ -408,7 +406,7 @@ async def _call_alphabot_a2a(
     # The id for SendMessageRequest is the JSON-RPC request id, not the task id
     sdk_request = SendMessageRequest(id=str(uuid.uuid4()), params=sdk_send_params)
 
-    sim_logger.info(f"--- Calling AlphaBot A2A Server (Task ID: {a2a_task_id}) ---")
+    sim_logger.info(f"--- Calling AlphaBot A2A Server (Session ID: {session_id}) ---")
     outcome = {
         "approved_trade": None,
         "rejected_trade": None,

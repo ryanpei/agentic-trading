@@ -201,7 +201,6 @@ class A2ARiskCheckTool(BaseTool):
         )
 
         a2a_message = Message(
-            taskId=f"riskcheck-{invocation_id_short}",  # Use invocation_id from ToolContext's InvocationContext
             contextId=tool_context._invocation_context.session.id,
             messageId=str(uuid.uuid4()),
             role=Role.user,

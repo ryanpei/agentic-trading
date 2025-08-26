@@ -3,6 +3,7 @@ These mocks aim to provide minimal viable functionality for tests to run.
 """
 
 from unittest.mock import MagicMock
+from typing import Optional
 
 
 class BaseSessionService(MagicMock):
@@ -32,11 +33,11 @@ class InvocationContext:
 
     def __init__(
         self,
-        user_content=None,  # Should be a mock of genai_types.Content
-        session_service: InMemorySessionService = None,
-        invocation_id: str = None,
-        agent=None,  # Agent instance
-        session: Session = None,  # Session instance
+        user_content: "Optional[genai_types.Content]" = None,
+        session_service: "Optional[InMemorySessionService]" = None,
+        invocation_id: Optional[str] = None,
+        agent: Optional[MagicMock] = None,
+        session: "Optional[Session]" = None,
     ):
         self.user_content = user_content
         self.session_service = session_service
@@ -102,15 +103,7 @@ class EventActions(MagicMock):
             requested_auth_configs if requested_auth_configs is not None else {}
         )
 
-    def __bool__(self):
-        """Define boolean-ness based on whether it has meaningful content."""
-        return bool(
-            self.state_delta
-            or self.artifact_delta
-            or self.transfer_to_agent
-            or self.escalate
-            or self.requested_auth_configs
-        )
+    pass
 
 
 class Event:
@@ -120,12 +113,12 @@ class Event:
         self,
         author: str,
         content,
-        actions: EventActions = None,
+        actions: Optional[EventActions] = None,
         turn_complete: bool = False,
     ):  # content is genai_types.Content mock
         self.author = author
         self.content = content  # Should be an instance of genai_types.Content (mock)
-        self.actions = actions
+        self.actions = actions if actions is not None else EventActions()
         self.turn_complete = turn_complete
 
     def get_function_responses(self):
@@ -136,9 +129,7 @@ class Event:
         """
         responses = []
         if self.content and hasattr(self.content, "parts"):
-            for (
-                part_mock
-            ) in (
+            for part_mock in (
                 self.content.parts
             ):  # part_mock is an instance of genai_types.Part (mock)
                 if (
