@@ -96,7 +96,7 @@ def check_trade_risk_logic(
             else 1.0
         )
         if concentration > max_concentration:  # Use parameter
-            reason = f"Exceeds max asset concentration ({concentration*100:.1f}% > {max_concentration*100:.1f}%)"
+            reason = f"Exceeds max asset concentration ({concentration * 100:.1f}% > {max_concentration * 100:.1f}%)"
             logger.warning(f"REJECTED - {reason}")
             return RiskCheckResult(approved=False, reason=reason)
 

@@ -5,7 +5,7 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import DataPart, Part, TaskState
+from a2a.types import DataPart, Part
 from common.config import (
     DEFAULT_RISKGUARD_MAX_CONCENTRATION,
     DEFAULT_RISKGUARD_MAX_POS_SIZE,

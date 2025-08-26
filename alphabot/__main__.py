@@ -56,14 +56,14 @@ def main(host: str, port: int):
             ],  # Expects market/portfolio state as structured data
             defaultOutputModes=["data"],  # Returns trade decision as structured data
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Error creating AgentCard")
         raise
 
     # Instantiate the AlphaBot AgentExecutor
     try:
         agent_executor = AlphaBotAgentExecutor()
-    except Exception as e:
+    except Exception:
         logger.exception("Error initializing AlphaBotAgentExecutor")
         raise
 
@@ -77,7 +77,7 @@ def main(host: str, port: int):
             agent_card=agent_card,
             http_handler=request_handler,
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Error initializing A2AStarletteApplication")
         raise
 

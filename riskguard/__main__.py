@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 )
 def main(host: str, port: int):
     """Runs the RiskGuard ADK agent as an A2A server."""
-    logger.info(f"Configuring RiskGuard A2A server...")
+    logger.info("Configuring RiskGuard A2A server...")
 
     try:
         agent_card = AgentCard(

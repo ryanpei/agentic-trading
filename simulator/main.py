@@ -7,8 +7,6 @@ for risk checks. Displays results including portfolio value, trades,
 and performance metrics using Plotly charts.
 """
 
-import asyncio
-import json
 import locale
 import logging
 import os
@@ -39,7 +37,7 @@ from common.config import (
     DEFAULT_SIMULATOR_PORT,
 )  # Keep this for the uvicorn runner at the bottom
 from common.utils.indicators import calculate_sma
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -160,7 +158,7 @@ def _create_results_figure(
         go.Scatter(
             x=results_df.index,
             y=results_df["SMA_Short"],
-            name=f'SMA({params["alphabot_short_sma"]})',
+            name=f"SMA({params['alphabot_short_sma']})",
             line=dict(color="orange", dash="dot"),
             legendgroup="price",
             legendrank=2,
@@ -172,7 +170,7 @@ def _create_results_figure(
         go.Scatter(
             x=results_df.index,
             y=results_df["SMA_Long"],
-            name=f'SMA({params["alphabot_long_sma"]})',
+            name=f"SMA({params['alphabot_long_sma']})",
             line=dict(color="lightcoral", dash="dash"),
             legendgroup="price",
             legendrank=3,
@@ -584,9 +582,7 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
         alphabot_url = params.get(
             "alphabot_url",
             os.environ.get("ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL),
-        ).rstrip(
-            "/"
-        )  # Ensure no trailing slash for A2AClient
+        ).rstrip("/")  # Ensure no trailing slash for A2AClient
         sim_logger.info(f"Using AlphaBot Service URL: {alphabot_url}")
 
         # The A2AClient needs an httpx.AsyncClient. Manage its lifecycle.
@@ -678,9 +674,9 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
                     reason_from_outcome = reason_text or (
                         "OK" if is_approved else "Reason not captured."
                     )
-                    signal_log_entry[
-                        "log"
-                    ] += f" | {action} {qty} {ticker} @ {format_currency(price)} | {status}: {reason_from_outcome}"
+                    signal_log_entry["log"] += (
+                        f" | {action} {qty} {ticker} @ {format_currency(price)} | {status}: {reason_from_outcome}"
+                    )
 
                     if action == "BUY":
                         if is_approved:
@@ -737,16 +733,16 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
                                 sim_logger.error(
                                     f"--- Trade Execution SKIPPED - Unknown action '{exec_action}' ---"
                                 )
-                                signal_log_entry[
-                                    "log"
-                                ] += f" | Execution SKIPPED (Unknown Action: {exec_action})."
+                                signal_log_entry["log"] += (
+                                    f" | Execution SKIPPED (Unknown Action: {exec_action})."
+                                )
                         else:
                             sim_logger.error(
                                 f"--- Trade Execution SKIPPED - Missing details: {trade_details} ---"
                             )
-                            signal_log_entry[
-                                "log"
-                            ] += " | Execution SKIPPED (Missing Data)."
+                            signal_log_entry["log"] += (
+                                " | Execution SKIPPED (Missing Data)."
+                            )
                         sim_logger.info(
                             f"Portfolio (After {action} attempt Day {day}): {portfolio}"
                         )
@@ -758,9 +754,9 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
                             f"Portfolio (Rejected Trade Day {day}): {portfolio}"
                         )
                 else:  # No trade_details and no A2A error means no trade was proposed
-                    signal_log_entry[
-                        "log"
-                    ] += f" | No trade proposed by AlphaBot. Reason: {reason_text or 'N/A'}"
+                    signal_log_entry["log"] += (
+                        f" | No trade proposed by AlphaBot. Reason: {reason_text or 'N/A'}"
+                    )
                     sim_logger.info(f"Portfolio (No Trade Day {day}): {portfolio}")
 
                 signals.append(signal_log_entry)
@@ -818,9 +814,7 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             "error": error_msg,
             "detailed_log": "\n".join(sim_log_list),
         }
-    except (
-        httpx.ConnectError
-    ) as connect_err:  # Catch direct httpx connect errors if A2AClient setup itself fails
+    except httpx.ConnectError as connect_err:  # Catch direct httpx connect errors if A2AClient setup itself fails
         error_msg = f"Failed to connect to AlphaBot service at {alphabot_url}: {connect_err}. Ensure AlphaBot is running."
         logger.error(error_msg)
         sim_logger.error(error_msg)
@@ -857,14 +851,10 @@ async def read_root(request: Request) -> HTMLResponse:
         "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
         "DEFAULT_ALPHABOT_URL": os.environ.get(
             "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
-        ).rstrip(
-            "/"
-        ),  # Ensure no trailing slash for UI default
+        ).rstrip("/"),  # Ensure no trailing slash for UI default
         "DEFAULT_RISKGUARD_URL": os.environ.get(
             "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
-        ).rstrip(
-            "/"
-        ),  # Ensure no trailing slash
+        ).rstrip("/"),  # Ensure no trailing slash
         "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
         "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
         "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,

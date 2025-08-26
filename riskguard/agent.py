@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, AsyncGenerator, Dict
+from typing import AsyncGenerator
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
@@ -142,4 +142,4 @@ class RiskGuardAgent(BaseAgent):
 
 
 root_agent = RiskGuardAgent()
-logger.info(f"RiskGuardAgent root_agent instance created.")
+logger.info("RiskGuardAgent root_agent instance created.")
