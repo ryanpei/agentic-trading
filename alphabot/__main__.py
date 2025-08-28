@@ -84,7 +84,8 @@ def main(host: str, port: int):
     # Start the Server
     import uvicorn
 
-    logger.info(f"Starting AlphaBot A2A server on http://{host}:{port}/")
+    logger.info(f"Starting AlphaBot A2A server on http://{host}:{port}")
+    logger.info("Press Ctrl+C to stop the server.")
     uvicorn.run(app_builder.build(), host=host, port=port)
 
 

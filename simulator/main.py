@@ -10,7 +10,6 @@ and performance metrics using Plotly charts.
 import locale
 import logging
 import os
-import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,7 +32,6 @@ from a2a.types import Role as A2ARole
 from a2a.types import SendMessageRequest, SendMessageResponse
 from a2a.types import Task as A2ATask
 from common.config import (
-    DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME,
     DEFAULT_SIMULATOR_PORT,
 )  # Keep this for the uvicorn runner at the bottom
 from common.utils.indicators import calculate_sma
@@ -49,25 +47,11 @@ from .portfolio import PortfolioState, TradeAction
 
 SIMULATOR_UI_LOGGER = "SimulatorUI"
 SIMULATOR_LOGIC_LOGGER = "SimulatorLogic"
-TRADE_DECISION_ARTIFACT_NAME = DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(SIMULATOR_UI_LOGGER)
-
-try:
-    import common.utils.indicators
-
-    import simulator.market
-    import simulator.portfolio
-except ImportError as e:
-    logger.error(f"Failed to import necessary application modules: {e}")
-    logger.error(
-        "Ensure you run uvicorn from the project root (agentic_trading) directory."
-    )
-    logger.error("Example: uvicorn simulator.main:app --reload --port 8003")
-    sys.exit(1)
 
 module_dir = Path(__file__).parent
 templates_dir = module_dir / "templates"
@@ -102,8 +86,8 @@ def format_currency(value: Optional[float]) -> str:
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown events, including locale setting."""
     logger.info("Simulator UI starting up...")
+    locale_setting = "en_US.UTF-8"
     try:
-        locale_setting = "en_US.UTF-8"
         locale.setlocale(locale.LC_ALL, locale_setting)
         logger.info(f"Default locale set to: {locale.getlocale(locale.LC_ALL)}")
     except locale.Error as e:
@@ -442,7 +426,8 @@ async def _call_alphabot_a2a(
                     (
                         a
                         for a in task_result.artifacts
-                        if a.name == TRADE_DECISION_ARTIFACT_NAME
+                        if a.name
+                        == defaults.DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME
                     ),
                     None,
                 )
@@ -805,7 +790,7 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             "detailed_log": detailed_log,
         }
 
-    except ConnectionError as ce:  # Catch ConnectionError raised by _call_alphabot_a2a
+    except (ConnectionError, httpx.ConnectError) as ce:
         error_msg = f"Connection Error: {ce}. Ensure AlphaBot A2A server is running and accessible."
         logger.error(error_msg)
         sim_logger.error(error_msg)
@@ -814,10 +799,10 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
             "error": error_msg,
             "detailed_log": "\n".join(sim_log_list),
         }
-    except httpx.ConnectError as connect_err:  # Catch direct httpx connect errors if A2AClient setup itself fails
-        error_msg = f"Failed to connect to AlphaBot service at {alphabot_url}: {connect_err}. Ensure AlphaBot is running."
-        logger.error(error_msg)
-        sim_logger.error(error_msg)
+    except (A2AClientHTTPError, A2AClientJSONError) as a2a_err:
+        error_msg = f"A2A Client Error: {a2a_err}. Check the AlphaBot server logs for more details."
+        logger.error(error_msg, exc_info=True)
+        sim_logger.error(error_msg, exc_info=True)
         return {
             "success": False,
             "error": error_msg,
@@ -1036,6 +1021,12 @@ async def handle_run_simulation(
     simulation_status["is_running"] = False
 
     return RedirectResponse("/", status_code=303)
+
+
+@app.get("/health")
+async def health_check():
+    """Simple health check endpoint."""
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

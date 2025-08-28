@@ -1,12 +1,12 @@
-import json
 import logging
 from typing import AsyncGenerator
 
+from common.utils.agent_utils import parse_and_validate_input
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types as genai_types
-from pydantic import BaseModel, Field, ValidationError  # Import Pydantic
+from pydantic import BaseModel, Field
 
 from .rules import (
     DEFAULT_RISKGUARD_MAX_CONCENTRATION,
@@ -59,29 +59,15 @@ class RiskGuardAgent(BaseAgent):
             f"[{self.name} ({invocation_id_short})] Received risk check invocation"
         )
 
-        default_error_reason = "Internal Error: Failed to process input."
-        result_dict = {
-            "approved": False,
-            "reason": default_error_reason,
-        }
+        validated_input = parse_and_validate_input(ctx, RiskGuardInput, self.name)
 
-        input_text = None
-        if (
-            ctx.user_content
-            and ctx.user_content.parts
-            and hasattr(ctx.user_content.parts[0], "text")
-        ):
-            input_text = ctx.user_content.parts[0].text
-
-        if not input_text:
-            logger.error(
-                f"[{self.name} ({invocation_id_short})] Input message text not found."
-            )
-            result_dict["reason"] = "Internal Error: Missing input message text."
+        if not validated_input:
+            result_dict = {
+                "approved": False,
+                "reason": "Internal Error: Invalid input data.",
+            }
         else:
             try:
-                input_payload = json.loads(input_text)
-                validated_input = RiskGuardInput(**input_payload)
                 logger.info(
                     f"[{self.name} ({invocation_id_short})] Successfully parsed and validated input: {validated_input.model_dump_json(indent=2)}"
                 )
@@ -96,28 +82,15 @@ class RiskGuardAgent(BaseAgent):
                 )
                 result_dict = {"approved": result.approved, "reason": result.reason}
 
-            except json.JSONDecodeError as e:
-                logger.error(
-                    f"[{self.name} ({invocation_id_short})] Failed to decode input JSON from message: {input_text[:100]}... Error: {e}",
-                    exc_info=True,
-                )
-                result_dict["reason"] = (
-                    "Internal Error: Invalid input data format (JSON)."
-                )
-            except ValidationError as e:
-                logger.error(
-                    f"[{self.name} ({invocation_id_short})] Input validation failed: {e}. Input was: '{input_text[:200]}...'"
-                )
-                result_dict["reason"] = (
-                    f"Internal Error: Invalid input data structure - {e.errors()}"
-                )
-
             except Exception as e:
                 logger.error(
                     f"[{self.name} ({invocation_id_short})] Unexpected error processing input: {e}",
                     exc_info=True,
                 )
-                result_dict["reason"] = f"Internal Error: {e}"
+                result_dict = {
+                    "approved": False,
+                    "reason": f"Internal Error: {e}",
+                }
 
         logger.info(
             f"[{self.name} ({invocation_id_short})] Yielding result: {result_dict}"

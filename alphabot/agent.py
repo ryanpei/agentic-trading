@@ -1,4 +1,3 @@
-import json
 import logging
 import uuid
 from typing import AsyncGenerator, List
@@ -13,6 +12,7 @@ from common.config import (
     DEFAULT_RISKGUARD_URL,
     DEFAULT_TICKER,
 )
+from common.utils.agent_utils import parse_and_validate_input
 from common.utils.indicators import calculate_sma
 
 # ADK Imports
@@ -21,7 +21,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types as genai_types
-from pydantic import BaseModel, Field, ValidationError  # Import Pydantic
+from pydantic import BaseModel, Field
 
 from .a2a_risk_tool import A2ARiskCheckTool
 
@@ -70,46 +70,6 @@ class AlphaBotAgent(BaseAgent):
             **kwargs,
         )
         logger.debug(f"[{self.name}] Initialized with ticker: {self.ticker}")
-
-    def _parse_and_validate_input_pydantic(
-        self, ctx: InvocationContext
-    ) -> AlphaBotInput | None:
-        """Parses input JSON into AlphaBotInput Pydantic model."""
-        invocation_id_short = ctx.invocation_id[:8]
-        logger.debug(
-            f"[{self.name} ({invocation_id_short})] Attempting to parse input with Pydantic..."
-        )
-        if (
-            not ctx.user_content
-            or not ctx.user_content.parts
-            or not hasattr(ctx.user_content.parts[0], "text")
-        ):
-            logger.error(
-                f"[{self.name} ({invocation_id_short})] ERROR - Input event text not found."
-            )
-            return None
-
-        input_text = ctx.user_content.parts[0].text
-        try:
-            input_payload = json.loads(input_text)
-            validated_input = AlphaBotInput(**input_payload)
-            logger.info(
-                f"[{self.name} ({invocation_id_short})] Successfully parsed and validated input: {validated_input.model_dump(exclude={'historical_prices'})}"
-            )
-            logger.debug(
-                f"[{self.name} ({invocation_id_short})] Full validated input historical_prices count: {len(validated_input.historical_prices)}"
-            )
-            return validated_input
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"[{self.name} ({invocation_id_short})] ERROR - Failed to decode input JSON: '{input_text[:200]}...'. Error: {e}"
-            )
-            return None
-        except ValidationError as e:
-            logger.error(
-                f"[{self.name} ({invocation_id_short})] ERROR - Input validation failed: {e}. Input was: '{input_text[:200]}...'"
-            )
-            return None
 
     def _calculate_indicators(
         self,
@@ -404,7 +364,7 @@ class AlphaBotAgent(BaseAgent):
             f"[{self.name} ({invocation_id_short})] Initial 'should_be_long' from session state: {current_should_be_long}"
         )
 
-        validated_input = self._parse_and_validate_input_pydantic(ctx)
+        validated_input = parse_and_validate_input(ctx, AlphaBotInput, self.name)
         if validated_input is None:
             logger.warning(
                 f"[{self.name} ({invocation_id_short})] Invalid input data (Pydantic). Yielding error event."
