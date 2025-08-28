@@ -182,9 +182,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
                 f"Task {context.task_id}: ADK session_id (context.context_id) is None or empty. Cannot initialize ADK session."
             )
 
-        if (
-            not session
-        ):  # If session is still None after trying to get/create, or if session_id_for_adk was initially invalid
+        if not session:  # If session is still None after trying to get/create, or if session_id_for_adk was initially invalid
             error_message = f"Failed to establish ADK session. session_id was '{session_id_for_adk}'."
             logger.error(
                 f"Task {context.task_id}: {error_message} Cannot proceed with ADK run."

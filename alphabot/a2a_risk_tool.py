@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import uuid
@@ -36,9 +35,7 @@ class A2ARiskCheckTool(BaseTool):
     """
 
     name: str = "a2a_risk_check"
-    description: str = (
-        "Sends a trade proposal to the RiskGuard service for validation and returns the approval status and reason."
-    )
+    description: str = "Sends a trade proposal to the RiskGuard service for validation and returns the approval status and reason."
     risk_guard_url: str
 
     def __init__(self, **kwargs):

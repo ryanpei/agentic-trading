@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 )
 def main(host: str, port: int):
     """Runs the RiskGuard ADK agent as an A2A server."""
-    logger.info(f"Configuring RiskGuard A2A server...")
+    logger.info("Configuring RiskGuard A2A server...")
 
     try:
         agent_card = AgentCard(
@@ -79,7 +79,8 @@ def main(host: str, port: int):
     # Start the Server
     import uvicorn
 
-    logger.info(f"Starting RiskGuard A2A server on http://{host}:{port}/")
+    logger.info(f"Starting RiskGuard A2A server on http://{host}:{port}")
+    logger.info("Press Ctrl+C to stop the server.")
     uvicorn.run(app_builder.build(), host=host, port=port)
 
 
