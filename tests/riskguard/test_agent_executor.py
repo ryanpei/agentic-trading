@@ -1,9 +1,10 @@
-import pytest
 from typing import Callable
 
-from a2a.types import Message, DataPart, Part, Role
+import pytest
+from a2a.server.agent_execution import RequestContext
+from a2a.server.events import EventQueue
+from a2a.types import DataPart, Message, Part, Role, MessageSendParams
 from riskguard.agent_executor import RiskGuardAgentExecutor
-from tests.conftest import adk_mock_riskguard_generator, run_executor_test
 
 
 @pytest.fixture
@@ -23,15 +24,20 @@ def riskguard_message_factory(
     return _create_message
 
 
+@pytest.fixture
+def event_queue():
+    """EventQueue for testing."""
+    return EventQueue()
+
+
 @pytest.mark.asyncio
 async def test_execute_success_approved(
-    riskguard_message_factory, mock_runner, task_updater_fixture
+    riskguard_message_factory,
+    mock_runner_factory,
+    event_queue,
+    adk_mock_riskguard_generator,
 ):
-    """Test with a simplified message creation."""
-    mock_runner_instance = mock_runner.return_value
-    task_updater, mock_event_queue = task_updater_fixture(
-        "test-task-123", "test-context-456"
-    )
+    mock_runner_instance = mock_runner_factory("riskguard.agent_executor")
 
     # Arrange
     request_message = riskguard_message_factory(
@@ -44,39 +50,35 @@ async def test_execute_success_approved(
 
     # Act
     executor = RiskGuardAgentExecutor()
-    await run_executor_test(
-        executor,
-        request_message,
-        mock_runner_instance,
-        task_updater=task_updater,
+    executor._adk_runner = mock_runner_instance  # Inject the mock runner
+    await executor.execute(
+        context=RequestContext(
+            request=MessageSendParams(message=request_message),
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=event_queue,
     )
 
     # Assert
     assert mock_runner_instance.run_async.call_count == 1
-    assert (
-        mock_event_queue.enqueue_event.call_count == 4
-    )  # submit, start, artifact, complete
+    enqueued_message = await event_queue.dequeue_event()
 
-    submit_call = mock_event_queue.enqueue_event.call_args_list[0]
-    assert submit_call.args[0].status.state == "submitted"
+    assert isinstance(enqueued_message, Message)
+    assert enqueued_message.context_id == "test-context-456"
+    assert enqueued_message.task_id == "test-task-123"
+    assert len(enqueued_message.parts) == 1
+    assert isinstance(enqueued_message.parts[0].root, DataPart)
 
-    start_call = mock_event_queue.enqueue_event.call_args_list[1]
-    assert start_call.args[0].status.state == "working"
-
-    artifact_call = mock_event_queue.enqueue_event.call_args_list[2]
-    expected_artifact = {"approved": True, "reason": "Within risk parameters."}
-    assert artifact_call.args[0].artifact.parts[0].root.data == expected_artifact
-
-    complete_call = mock_event_queue.enqueue_event.call_args_list[3]
-    assert complete_call.args[0].status.state == "completed"
+    expected_data = {"approved": True, "reason": "Within risk parameters."}
+    assert enqueued_message.parts[0].root.data == expected_data
 
 
 @pytest.mark.asyncio
-async def test_execute_missing_trade_proposal(mock_runner, task_updater_fixture):
-    mock_runner_instance = mock_runner.return_value
-    task_updater, mock_event_queue = task_updater_fixture(
-        "test-task-123", "test-context-456"
-    )
+async def test_execute_missing_trade_proposal(
+    mock_runner_factory, event_queue, adk_mock_riskguard_generator
+):
+    mock_runner_instance = mock_runner_factory("riskguard.agent_executor")
 
     # Arrange
     request_message = Message(
@@ -99,36 +101,39 @@ async def test_execute_missing_trade_proposal(mock_runner, task_updater_fixture)
 
     # Act
     executor = RiskGuardAgentExecutor()
-    await run_executor_test(
-        executor,
-        request_message,
-        mock_runner_instance,
-        task_updater=task_updater,
+    executor._adk_runner = mock_runner_instance  # Inject the mock runner
+    await executor.execute(
+        context=RequestContext(
+            request=MessageSendParams(message=request_message),
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=event_queue,
     )
 
     # Assert
-    assert mock_event_queue.enqueue_event.call_count == 3  # submit, start, failed
-    submit_call = mock_event_queue.enqueue_event.call_args_list[0]
-    assert submit_call.args[0].status.state == "submitted"
+    enqueued_message = await event_queue.dequeue_event()
 
-    start_call = mock_event_queue.enqueue_event.call_args_list[1]
-    assert start_call.args[0].status.state == "working"
-
-    fail_call = mock_event_queue.enqueue_event.call_args_list[2]
-    assert fail_call.args[0].status.state == "failed"
-    fail_message = fail_call.args[0].status.message
-    assert "Invalid input data" in str(fail_message.parts[0].root.data)
+    assert isinstance(enqueued_message, Message)
+    assert enqueued_message.context_id == "test-context-456"
+    assert enqueued_message.task_id == "test-task-123"
+    assert len(enqueued_message.parts) == 1
+    assert isinstance(enqueued_message.parts[0].root, DataPart)
+    assert (
+        "An internal error occurred: Missing 'trade_proposal' or 'portfolio_state' in data payload"
+        in enqueued_message.parts[0].root.data["reason"]
+    )
     mock_runner_instance.run_async.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_execute_adk_runner_exception(
-    riskguard_message_factory, mock_runner, task_updater_fixture
+    riskguard_message_factory,
+    mock_runner_factory,
+    event_queue,
+    adk_mock_riskguard_generator,
 ):
-    mock_runner_instance = mock_runner.return_value
-    task_updater, mock_event_queue = task_updater_fixture(
-        "test-task-123", "test-context-456"
-    )
+    mock_runner_instance = mock_runner_factory("riskguard.agent_executor")
 
     # Arrange
     mock_runner_instance.run_async.side_effect = Exception("ADK Borked")
@@ -136,22 +141,65 @@ async def test_execute_adk_runner_exception(
 
     # Act
     executor = RiskGuardAgentExecutor()
-    await run_executor_test(
-        executor,
-        request_message,
-        mock_runner_instance,
-        task_updater=task_updater,
+    executor._adk_runner = mock_runner_instance  # Inject the mock runner
+    await executor.execute(
+        context=RequestContext(
+            request=MessageSendParams(message=request_message),
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=event_queue,
     )
 
     # Assert
-    assert mock_event_queue.enqueue_event.call_count == 3  # submit, start, failed
-    submit_call = mock_event_queue.enqueue_event.call_args_list[0]
-    assert submit_call.args[0].status.state == "submitted"
+    enqueued_message = await event_queue.dequeue_event()
 
-    start_call = mock_event_queue.enqueue_event.call_args_list[1]
-    assert start_call.args[0].status.state == "working"
+    assert isinstance(enqueued_message, Message)
+    assert enqueued_message.context_id == "test-context-456"
+    assert enqueued_message.task_id == "test-task-123"
+    assert len(enqueued_message.parts) == 1
+    assert isinstance(enqueued_message.parts[0].root, DataPart)
+    assert (
+        "An internal error occurred: ADK Borked"
+        in enqueued_message.parts[0].root.data["reason"]
+    )
 
-    fail_call = mock_event_queue.enqueue_event.call_args_list[2]
-    assert fail_call.args[0].status.state == "failed"
-    fail_message = fail_call.args[0].status.message
-    assert "ADK Agent error: ADK Borked" in str(fail_message.parts[0].root.data)
+
+@pytest.mark.asyncio
+async def test_execute_handles_adk_runner_exception(
+    riskguard_message_factory, mock_runner_factory, event_queue
+):
+    """
+    Tests that if the ADK runner fails, the executor enqueues an error message
+    and closes the queue.
+    """
+    # Arrange
+    mock_runner = mock_runner_factory("riskguard.agent_executor")
+    # Simulate an exception during the ADK agent's execution
+    mock_runner.run_async.side_effect = Exception("ADK agent failed!")
+
+    request_message = riskguard_message_factory()
+    context = RequestContext(
+        request=MessageSendParams(message=request_message),
+        context_id="test-context-456",
+        task_id="test-task-123",
+    )
+
+    # Act
+    executor = RiskGuardAgentExecutor()
+    executor._adk_runner = mock_runner  # Inject the mock runner
+
+    await executor.execute(context, event_queue)
+
+    # Assert
+    # 1. An event was enqueued
+    enqueued_message = await event_queue.dequeue_event()
+
+    # 2. The enqueued event is a Message containing error details
+    assert isinstance(enqueued_message, Message)
+
+    # 3. The message part contains the error
+    error_part = enqueued_message.parts[0].root
+    assert isinstance(error_part, DataPart)
+    assert error_part.data["approved"] is False
+    assert "An internal error occurred: ADK agent failed!" in error_part.data["reason"]

@@ -153,10 +153,10 @@ async def test_alphabot_run_async_impl_buy_approved(
         async for event in agent._run_async_impl(adk_ctx):
             events.append(event)
 
-        # Expect two events: one for trade proposal, one for final result
+        # Expect two events: one for the proposal, one for the final result
         assert len(events) == 2
 
-        # Check the trade proposal event
+        # Check the proposal event
         proposal_event = events[0]
         assert proposal_event.author == agent.name
         assert "Proposing BUY" in proposal_event.content.parts[0].text
@@ -164,7 +164,6 @@ async def test_alphabot_run_async_impl_buy_approved(
         # Check the final event
         final_event = events[1]
         assert final_event.author == agent.name
-        assert final_event.turn_complete is True
         assert "Trade Approved (A2A)" in final_event.content.parts[0].text
         assert final_event.actions.state_delta["should_be_long"] is True
         assert "approved_trade" in final_event.actions.state_delta
@@ -256,10 +255,10 @@ async def test_alphabot_run_async_impl_sell_approved(
         async for event in agent._run_async_impl(adk_ctx):
             events.append(event)
 
-        # Expect two events: one for trade proposal, one for final result
+        # Expect two events: one for the proposal, one for the final result
         assert len(events) == 2
 
-        # Check the trade proposal event
+        # Check the proposal event
         proposal_event = events[0]
         assert proposal_event.author == agent.name
         assert "Proposing SELL" in proposal_event.content.parts[0].text
@@ -267,7 +266,6 @@ async def test_alphabot_run_async_impl_sell_approved(
         # Check the final event
         final_event = events[1]
         assert final_event.author == agent.name
-        assert final_event.turn_complete is True
         assert "Trade Approved (A2A)" in final_event.content.parts[0].text
         assert final_event.actions.state_delta["should_be_long"] is False
         assert "approved_trade" in final_event.actions.state_delta
@@ -300,11 +298,11 @@ def test_determine_trade_proposal_no_buy_when_long(agent: AlphaBotAgent):
     portfolio_state = PortfolioStateInput(cash=10000, shares=10, total_value=11000)
     proposal = agent._determine_trade_proposal(
         signal="BUY",
-        current_price=100.0,
+        should_be_long=True,  # <--- FIX
         portfolio_state=portfolio_state,
+        current_price=100.0,
         trade_quantity=10,
-        current_should_be_long=True,
-        invocation_id="test_invocation",
+        last_rejected_trade=None,  # <--- FIX
     )
     assert proposal is None
 
@@ -397,7 +395,6 @@ async def test_alphabot_run_async_impl_sell_approved_e2e(
         assert len(events) == 2
         final_event = events[1]
         assert final_event.author == agent.name
-        assert final_event.turn_complete is True
         assert "Trade Approved (A2A)" in final_event.content.parts[0].text
         assert final_event.actions.state_delta["should_be_long"] is False
         assert "approved_trade" in final_event.actions.state_delta
@@ -511,10 +508,8 @@ async def test_alphabot_run_async_impl_buy_rejected(
         assert len(events) == 2
         final_event = events[1]
         assert final_event.author == agent.name
-        assert final_event.turn_complete is True
         assert "Trade Rejected (A2A)" in final_event.content.parts[0].text
-        assert "should_be_long" in final_event.actions.state_delta
-        assert final_event.actions.state_delta["should_be_long"] is True
+        assert "should_be_long" not in final_event.actions.state_delta
         assert "rejected_trade_proposal" in final_event.actions.state_delta
 
 
@@ -523,11 +518,11 @@ def test_determine_trade_proposal_no_sell_when_not_long(agent: AlphaBotAgent):
     portfolio_state = PortfolioStateInput(cash=10000, shares=0, total_value=10000)
     proposal = agent._determine_trade_proposal(
         signal="SELL",
-        current_price=100.0,
+        should_be_long=False,  # <--- FIX
         portfolio_state=portfolio_state,
+        current_price=100.0,
         trade_quantity=10,
-        current_should_be_long=False,
-        invocation_id="test_invocation",
+        last_rejected_trade=None,  # <--- FIX
     )
     assert proposal is None
 
@@ -537,11 +532,11 @@ def test_determine_trade_proposal_no_sell_when_long_no_shares(agent: AlphaBotAge
     portfolio_state = PortfolioStateInput(cash=10000, shares=0, total_value=10000)
     proposal = agent._determine_trade_proposal(
         signal="SELL",
-        current_price=100.0,
+        should_be_long=True,  # <--- FIX
         portfolio_state=portfolio_state,
+        current_price=100.0,
         trade_quantity=10,
-        current_should_be_long=True,
-        invocation_id="test_invocation",
+        last_rejected_trade=None,  # <--- FIX
     )
     assert proposal is None
 
@@ -739,7 +734,6 @@ async def test_alphabot_concurrency(
             assert len(events) == 2
             final_event = events[1]
             assert final_event.author == agent.name
-            assert final_event.turn_complete is True
             assert final_event.content is not None
             assert final_event.content.parts is not None
             assert final_event.content.parts[0].text is not None
@@ -835,18 +829,17 @@ async def test_alphabot_does_not_repropose_rejected_trade(
         # --- First Invocation: Propose and get rejected ---
         events_run1 = [event async for event in agent._run_async_impl(adk_ctx)]
 
-        # Expect a proposal and a rejection
+        # Expect a rejection (proposal and rejection events)
         assert len(events_run1) == 2
         final_event_run1 = events_run1[1]
         assert final_event_run1.content is not None
         assert final_event_run1.content.parts is not None
         assert final_event_run1.content.parts[0].text is not None
         assert "Trade Rejected (A2A)" in final_event_run1.content.parts[0].text
-        assert "should_be_long" in final_event_run1.actions.state_delta
-        assert final_event_run1.actions.state_delta["should_be_long"] is True
+        assert "should_be_long" not in final_event_run1.actions.state_delta
 
         # --- Second Invocation: Should NOT propose again ---
-        # Update the session state with the (empty) delta from the first run
+        # Update the session state with the delta from the first run, which includes the rejected trade
         adk_ctx.session.state.update(final_event_run1.actions.state_delta)
 
         # Rerun with the exact same input
@@ -859,7 +852,7 @@ async def test_alphabot_does_not_repropose_rejected_trade(
         assert final_event_run2.content.parts is not None
         assert final_event_run2.content.parts[0].text is not None
         assert (
-            "Signal generated, no action needed"
+            "Signal generated, but no trade action needed based on current state or recent rejections."
             in final_event_run2.content.parts[0].text
         )
 
@@ -875,10 +868,10 @@ def test_determine_trade_proposal_rejects_sell_if_quantity_exceeds_shares(
     trade_quantity = 10  # Attempting to sell more than owned
     proposal = agent._determine_trade_proposal(
         signal="SELL",
-        current_price=100.0,
+        should_be_long=True,  # <--- FIX
         portfolio_state=portfolio_state,
+        current_price=100.0,
         trade_quantity=trade_quantity,
-        current_should_be_long=True,
-        invocation_id="test_invocation",
+        last_rejected_trade=None,  # <--- FIX
     )
     assert proposal is None

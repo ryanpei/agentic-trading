@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import uuid
@@ -15,8 +14,6 @@ from a2a.types import (
     SendMessageRequest,
     SendMessageResponse,
     SendMessageSuccessResponse,
-    Task,
-    TextPart,
 )
 from common.config import (
     DEFAULT_RISKGUARD_MAX_CONCENTRATION,
@@ -137,10 +134,10 @@ class A2ARiskCheckTool(BaseTool):
             ),
         )
 
-    async def run_async(
-        self, args: Dict[str, Any], tool_context: ToolContext
-    ) -> AsyncGenerator[Event, None]:
+    async def run_async(self, **kwargs: Any) -> AsyncGenerator[Event, None]:
         """Makes the actual A2A HTTP call."""
+        tool_context: ToolContext = kwargs["tool_context"]
+        args: Dict[str, Any] = kwargs["args"]
         invocation_id_short = tool_context.invocation_id[:8]
         logger.debug(
             f"[{self.name} Tool ({invocation_id_short})] Received args: {args}"
@@ -228,6 +225,7 @@ class A2ARiskCheckTool(BaseTool):
                 f"[{self.name} Tool ({invocation_id_short})] Received A2A response: {response.model_dump_json(exclude_none=True)}"
             )
             root_response_part = response.root
+
             if isinstance(root_response_part, JSONRPCErrorResponse):
                 actual_error = root_response_part.error
                 logger.warning(
@@ -237,69 +235,23 @@ class A2ARiskCheckTool(BaseTool):
                     f"A2A Error {actual_error.code}: {actual_error.message}"
                 )
             elif isinstance(root_response_part, SendMessageSuccessResponse):
-                # The result can be a Task or a Message
                 response_result = root_response_part.result
-                result_found = False
-
-                if isinstance(response_result, Task):
-                    task_result: Task = response_result
-                    # First, check for artifacts (though RiskGuard doesn't send them in this setup)
-                    if task_result.artifacts:
-                        for artifact_item in task_result.artifacts:
-                            if (
-                                artifact_item.name == "risk_assessment"
-                                and artifact_item.parts
-                            ):
-                                result_part_union = artifact_item.parts[0].root
-                                if isinstance(result_part_union, DataPart):
-                                    final_result_dict = result_part_union.data
-                                    logger.info(
-                                        f"[{self.name} Tool ({invocation_id_short})] Extracted 'risk_assessment' artifact from Task: {final_result_dict}"
-                                    )
-                                    result_found = True
-                                    break
-
-                    # If no artifact found, check task history or status message
-                    if not result_found:
-                        messages_to_check = []
-                        if task_result.history:
-                            messages_to_check.extend(task_result.history)
-                        if task_result.status and task_result.status.message:
-                            messages_to_check.append(task_result.status.message)
-
-                        for msg in messages_to_check:
-                            if msg.parts:
-                                msg_part_root = msg.parts[0].root
-                                result = self._extract_result_from_part(
-                                    msg_part_root, invocation_id_short
-                                )
-                                if result:
-                                    final_result_dict = result
-                                    result_found = True
-                                    break
-
-                elif isinstance(response_result, Message):
-                    # If RiskGuard sends a direct message (not wrapped in a Task)
-                    if response_result.parts:
-                        message_part_root = response_result.parts[0].root
-                        result = self._extract_result_from_part(
-                            message_part_root, invocation_id_short
+                if isinstance(response_result, Message):
+                    if response_result.parts and isinstance(
+                        response_result.parts[0].root, DataPart
+                    ):
+                        final_result_dict = response_result.parts[0].root.data
+                    else:
+                        final_result_dict["reason"] = (
+                            "RiskGuard returned an invalid message format."
                         )
-                        if result:
-                            final_result_dict = result
-                            result_found = True
-
-                if not result_found:
-                    logger.warning(
-                        f"[{self.name} Tool ({invocation_id_short})] 'risk_assessment' artifact or direct message result not found in A2A response."
+                else:
+                    raise TypeError(
+                        f"Expected a Message from RiskGuard, but got {type(response_result)}"
                     )
-                    final_result_dict["reason"] = (
-                        "A2A Error: 'risk_assessment' artifact or direct message result not found."
-                    )
-                    final_result_dict["approved"] = False
             else:
                 logger.error(
-                    f"[{self.name} Tool ({invocation_id_short})] Unexpected A2A response structure. Root type: {type(root_response_part)}. Full response: {response.model_dump_json(exclude_none=True)}"
+                    f"[{self.name} Tool ({invocation_id_short})] Unexpected A2A response structure. Root type: {type(root_response_part)}."
                 )
                 final_result_dict["reason"] = (
                     "A2A Error: Unexpected response structure."
@@ -349,34 +301,3 @@ class A2ARiskCheckTool(BaseTool):
             ),
             turn_complete=True,  # This tool completes its action in one go
         )
-
-    def _extract_result_from_part(
-        self, part_root, invocation_id_short: str
-    ) -> dict | None:
-        """Extract result data from a message part."""
-        if isinstance(part_root, TextPart) and part_root.text:
-            try:
-                parsed_data = json.loads(part_root.text)
-                if (
-                    isinstance(parsed_data, dict)
-                    and "approved" in parsed_data
-                    and "reason" in parsed_data
-                ):
-                    logger.info(
-                        f"[{self.name} Tool ({invocation_id_short})] Extracted result from TextPart JSON: {parsed_data}"
-                    )
-                    return parsed_data
-            except json.JSONDecodeError:
-                logger.warning(
-                    f"[{self.name} Tool ({invocation_id_short})] TextPart is not JSON: {part_root.text}"
-                )
-        elif isinstance(part_root, DataPart):
-            logger.info(
-                f"[{self.name} Tool ({invocation_id_short})] Extracted result from DataPart: {part_root.data}"
-            )
-            return part_root.data
-        else:
-            logger.warning(
-                f"[{self.name} Tool ({invocation_id_short})] Part contains unsupported type: {type(part_root)}"
-            )
-        return None

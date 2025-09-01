@@ -155,66 +155,49 @@ class AlphaBotAgent(BaseAgent):
 
     def _determine_trade_proposal(
         self,
-        signal: str | None,
-        current_price: float,
+        signal: Optional[str],
+        should_be_long: bool,
         portfolio_state: PortfolioStateInput,
+        current_price: float,
         trade_quantity: int,
-        current_should_be_long: bool,
-        invocation_id: str,
-    ) -> dict | None:
+        last_rejected_trade: Optional[dict],
+    ) -> Optional[dict]:
         """Determines the trade proposal based on signal and current state."""
-        logger.info(
-            f"[{self.name} ({invocation_id[:8]})] Determining trade proposal: Signal='{signal}', "
-            f"current_price=${current_price:.2f}, current_should_be_long={current_should_be_long}"
-        )
-        trade_proposal = None
-        if signal == "BUY":
-            if not current_should_be_long:
-                trade_proposal = {
-                    "action": "BUY",
-                    "ticker": self.ticker,
-                    "quantity": trade_quantity,
-                    "price": current_price,
-                }
-                logger.info(
-                    f"[{self.name} ({invocation_id[:8]})] Proposing BUY {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f}"
-                )
-            else:
-                logger.info(
-                    f"[{self.name} ({invocation_id[:8]})] BUY Signal, but already long. No trade proposal."
-                )
-        elif signal == "SELL":
-            if current_should_be_long:
-                if portfolio_state.shares > 0:
-                    if trade_quantity > portfolio_state.shares:
-                        logger.info(
-                            f"[{self.name} ({invocation_id[:8]})] SELL Signal, but trade quantity ({trade_quantity}) "
-                            f"exceeds available shares ({portfolio_state.shares}). No trade proposal."
-                        )
-                        trade_proposal = None
-                    else:
-                        trade_proposal = {
-                            "action": "SELL",
-                            "ticker": self.ticker,
-                            "quantity": trade_quantity,
-                            "price": current_price,
-                        }
-                        logger.info(
-                            f"[{self.name} ({invocation_id[:8]})] Proposing SELL {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f}"
-                        )
-                else:
-                    logger.info(
-                        f"[{self.name} ({invocation_id[:8]})] SELL Signal, state is long, but no shares held. No trade proposal."
-                    )
-            else:
-                logger.info(
-                    f"[{self.name} ({invocation_id[:8]})] SELL Signal, but already flat/short. No trade proposal."
-                )
 
-        if not trade_proposal:
+        trade_proposal = None
+        ticker = self.ticker or DEFAULT_TICKER
+
+        if signal == "BUY" and not should_be_long:
+            trade_proposal = {
+                "action": "BUY",
+                "ticker": ticker,
+                "quantity": trade_quantity,
+                "price": current_price,
+            }
+
+        elif signal == "SELL" and should_be_long:
+            # Prevent selling more shares than available
+            if trade_quantity > portfolio_state.shares:
+                logger.warning(
+                    f"SELL signal ignored: Trade quantity ({trade_quantity}) "
+                    f"exceeds available shares ({portfolio_state.shares})."
+                )
+                return None
+
+            trade_proposal = {
+                "action": "SELL",
+                "ticker": ticker,
+                "quantity": trade_quantity,
+                "price": current_price,
+            }
+
+        # If a new proposal was generated, check if it's the same as the last rejected one.
+        if trade_proposal and trade_proposal == last_rejected_trade:
             logger.info(
-                f"[{self.name} ({invocation_id[:8]})] No trade proposal generated for signal '{signal}' and current_should_be_long={current_should_be_long}."
+                f"Signal to {signal} ignored as it matches a recently rejected trade."
             )
+            return None
+
         return trade_proposal
 
     async def _perform_risk_check(
@@ -342,20 +325,9 @@ class AlphaBotAgent(BaseAgent):
             logger.info(
                 f"[{self.name} ({invocation_id_short})] Trade REJECTED by RiskGuard. Reason: {reason}"
             )
-            # Even if a trade is rejected, we still want to set the 'should_be_long' state
-            # to indicate the agent's intention. This prevents the agent from immediately
-            # re-proposing the same trade.
-            if signal == "BUY":
-                new_should_be_long_value = True
-            elif signal == "SELL":
-                new_should_be_long_value = False
-
-            if new_should_be_long_value is not None:
-                state_delta_content["should_be_long"] = new_should_be_long_value
-                logger.debug(
-                    f"[{self.name} ({invocation_id_short})] Setting 'should_be_long' in state_delta to: {new_should_be_long_value} (rejected trade)"
-                )
+            # Persist the rejected trade proposal to prevent immediate re-proposal.
             state_delta_content["rejected_trade_proposal"] = trade_proposal
+            # Do NOT update should_be_long, as the intended state was not achieved.
             final_event_text = f"Trade Rejected (A2A): {reason}"
 
         logger.info(
@@ -379,6 +351,7 @@ class AlphaBotAgent(BaseAgent):
         )
 
         current_should_be_long = ctx.session.state.get("should_be_long", False)
+        last_rejected_trade = ctx.session.state.get("rejected_trade_proposal")
         logger.info(
             f"[{self.name} ({invocation_id_short})] Initial 'should_be_long' from session state: {current_should_be_long}"
         )
@@ -503,30 +476,26 @@ class AlphaBotAgent(BaseAgent):
             return
 
         trade_proposal = self._determine_trade_proposal(
-            signal,
-            current_price,
-            portfolio_state,
-            trade_quantity,
-            current_should_be_long,
-            ctx.invocation_id,
+            signal=signal,
+            should_be_long=current_should_be_long,
+            portfolio_state=portfolio_state,
+            current_price=current_price,
+            trade_quantity=trade_quantity,
+            last_rejected_trade=last_rejected_trade,
         )
-        if trade_proposal is None:
-            logger.info(
-                f"[{self.name} ({invocation_id_short})] Signal ('{signal}') generated, but no trade action needed based on current_should_be_long={current_should_be_long}. Yielding event."
+
+        if not trade_proposal:
+            reason_no_trade = (
+                "Signal generated, but no trade action needed based on current state or recent rejections."
+                if signal
+                else "No signal generated."
             )
             yield Event(
                 author=self.name,
                 content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            text="Signal generated, no action needed based on current strategy state."
-                        )
-                    ]
+                    parts=[genai_types.Part(text=reason_no_trade)]
                 ),
                 turn_complete=True,
-            )
-            logger.info(
-                f"[{self.name} ({invocation_id_short})] >>> Invocation END (No Trade Proposal Needed) <<<"
             )
             return
 
