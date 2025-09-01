@@ -49,8 +49,6 @@ class RiskGuardAgent(BaseAgent):
                     f"[{self.name} ({invocation_id_short})] Successfully parsed and validated input: {validated_input.model_dump_json(indent=2)}"
                 )
 
-                # Pass Pydantic models or their dict representations to logic
-                # The check_trade_risk_logic expects dicts for trade_proposal and portfolio_state
                 result: RiskCheckResult = check_trade_risk_logic(
                     trade_proposal=validated_input.trade_proposal,
                     portfolio_state=validated_input.portfolio_state,
