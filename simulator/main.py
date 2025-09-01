@@ -28,21 +28,23 @@ from a2a.client import (
     A2AClientJSONError,
 )
 from a2a.types import (
-    DataPart as A2ADataPart,
+    DataPart,
     JSONRPCErrorResponse,
     SendMessageSuccessResponse,
     Message as A2AMessage,
-    MessageSendConfiguration,
-    MessageSendParams,
-    Role as A2ARole,
-    SendMessageRequest,
+    Role,
     SendMessageResponse,
-    Part,
 )
 from common.config import (
     DEFAULT_SIMULATOR_PORT,
 )  # Keep this for the uvicorn runner at the bottom
-from common.models import PortfolioState as CommonPortfolioState
+from common.models import (
+    AlphaBotTaskPayload,
+    PortfolioState as CommonPortfolioState,
+    TradeOutcome,
+    TradeStatus,
+)
+from common.utils.agent_utils import create_a2a_request_from_payload
 from common.utils.indicators import calculate_sma
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
@@ -341,55 +343,26 @@ async def _call_alphabot_a2a(
     Returns:
         A dictionary containing the outcome.
     """
-
-    # 1. Create a Pydantic model for the portfolio state for data consistency.
-    portfolio_model = CommonPortfolioState(
-        cash=portfolio.cash,
-        shares=portfolio.shares,
-        total_value=portfolio.total_value,
-    )
-
-    # 2. Construct the A2A message with two separate data parts, as expected by the AlphaBot executor.
-    market_data_part = Part(
-        root=A2ADataPart(
-            data={
-                "historical_prices": historical_prices,
-                "current_price": current_price,
-                "day": day,
-            }
-        )
-    )
-    # The portfolio data should be the top-level object in its part for the executor to parse correctly.
-    portfolio_state_part = Part(root=A2ADataPart(data=portfolio_model.model_dump()))
-
-    # 3. Define the agent parameters to be sent in the message metadata.
-    agent_params_metadata = {
-        "short_sma": params["alphabot_short_sma"],
-        "long_sma": params["alphabot_long_sma"],
-        "trade_qty": params["alphabot_trade_qty"],
-        "riskguard_url": params["riskguard_url"],
-        "max_pos_size": params["riskguard_max_pos_size"],
-        "max_concentration": params["riskguard_max_concentration"] / 100.0,
-    }
-
-    sdk_message = A2AMessage(
-        message_id=str(uuid.uuid4()),
-        role=A2ARole.user,
-        parts=[market_data_part, portfolio_state_part],
-        metadata=agent_params_metadata,
-        context_id=session_id,
-    )
-    sdk_send_params = MessageSendParams(
-        message=sdk_message,
-        configuration=MessageSendConfiguration(
-            accepted_output_modes=[
-                "data",
-                "application/json",
-            ]
+    # 1. Create a single, unified payload object.
+    payload = AlphaBotTaskPayload(
+        historical_prices=historical_prices,
+        current_price=current_price,
+        portfolio_state=CommonPortfolioState(
+            cash=portfolio.cash,
+            shares=portfolio.shares,
+            total_value=portfolio.total_value,
         ),
+        day=day,
+        short_sma_period=params["alphabot_short_sma"],
+        long_sma_period=params["alphabot_long_sma"],
+        trade_quantity=params["alphabot_trade_qty"],
+        riskguard_url=params["riskguard_url"],
+        max_pos_size=params["riskguard_max_pos_size"],
+        max_concentration=params["riskguard_max_concentration"] / 100.0,
     )
-    # The id for SendMessageRequest is the JSON-RPC request id, not the task id
-    sdk_request = SendMessageRequest(id=str(uuid.uuid4()), params=sdk_send_params)
+
+    # 2. Use the new helper to create the A2A Request
+    sdk_request = create_a2a_request_from_payload(payload, role=Role.user)
 
     sim_logger.info(f"--- Calling AlphaBot A2A Server (Session ID: {session_id}) ---")
     outcome: Dict[str, Any] = {
@@ -422,43 +395,39 @@ async def _call_alphabot_a2a(
                 outcome["error"] = "A2A Response Format Issue: Expected Message"
                 return outcome
 
-            result_data = None
+            # 4. Parse the response using the new TradeOutcome model
             if result_message.parts and isinstance(
-                result_message.parts[0].root, A2ADataPart
+                result_message.parts[0].root, DataPart
             ):
-                result_data = result_message.parts[0].root.data
-                sim_logger.info(f"  >> Extracted Result Data: {result_data}")
-            else:
-                sim_logger.warning(
-                    "  >> AlphaBot returned an invalid message format (no DataPart found)."
-                )
-                outcome["error"] = "AlphaBot Response Format Issue: No DataPart"
+                part_data = result_message.parts[0].root.data
+                # The data part should contain the JSON representation of TradeOutcome
+                outcome_model = TradeOutcome.model_validate(part_data)
 
-            if result_data and isinstance(result_data, dict):
-                outcome["reason"] = result_data.get("reason", "Reason not provided.")
-                if result_data.get("approved") is True:
-                    outcome["approved_trade"] = result_data.get(
-                        "trade_proposal", result_data
-                    )
+                if outcome_model.status == TradeStatus.APPROVED:
+                    if outcome_model.trade_proposal:
+                        outcome["approved_trade"] = (
+                            outcome_model.trade_proposal.model_dump()
+                        )
                     sim_logger.info(
-                        f"    >>> Approved Trade: {outcome['approved_trade']} (Reason: {outcome['reason']})"
+                        f"    >>> Approved Trade: {outcome.get('approved_trade')} (Reason: {outcome_model.reason})"
                     )
-                elif result_data.get("approved") is False:
-                    outcome["rejected_trade"] = result_data.get(
-                        "trade_proposal", result_data
-                    )
+                elif outcome_model.status == TradeStatus.REJECTED:
+                    if outcome_model.trade_proposal:
+                        outcome["rejected_trade"] = (
+                            outcome_model.trade_proposal.model_dump()
+                        )
                     sim_logger.info(
-                        f"    >>> Rejected Trade: {outcome['rejected_trade']} (Reason: {outcome['reason']})"
+                        f"    >>> Rejected Trade: {outcome.get('rejected_trade')} (Reason: {outcome_model.reason})"
                     )
-                else:
+                elif outcome_model.status == TradeStatus.NO_ACTION:
                     sim_logger.info(
-                        f"  >> Received status update from AlphaBot: {result_data.get('status', 'Unknown status')}"
+                        f"  >> Received info message from AlphaBot: {outcome_model.reason}"
                     )
-                    if "message" in result_data:
-                        outcome["reason"] = result_data["message"]
+
+                outcome["reason"] = outcome_model.reason
             else:
                 sim_logger.warning(
-                    "AlphaBot response lacked expected result data structure or conclusive status message."
+                    "AlphaBot response lacked expected DataPart with TradeOutcome."
                 )
                 outcome["error"] = "AlphaBot Response Format Issue or No Decision"
         else:

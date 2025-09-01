@@ -1,7 +1,6 @@
 import logging
-from dataclasses import dataclass
 
-from common.models import PortfolioState, TradeProposal
+from common.models import PortfolioState, RiskCheckResult, TradeProposal
 
 # Import defaults from the common config
 from common.config import (
@@ -10,14 +9,6 @@ from common.config import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RiskCheckResult:
-    """Dataclass to hold the result of a risk check."""
-
-    approved: bool
-    reason: str = ""
 
 
 def check_trade_risk_logic(

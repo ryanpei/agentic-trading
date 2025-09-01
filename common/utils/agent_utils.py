@@ -5,7 +5,14 @@ from pydantic import BaseModel, ValidationError
 import logging
 
 from google.adk.agents.invocation_context import InvocationContext
-from a2a.types import Message, Part, DataPart, Role
+from a2a.types import (
+    Message,
+    Part,
+    DataPart,
+    Role,
+    SendMessageRequest,
+    MessageSendParams,
+)
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
@@ -75,3 +82,12 @@ def create_a2a_message_from_payload(
         metadata=metadata or {},
         context_id=context_id,
     )
+
+
+def create_a2a_request_from_payload(
+    payload: BaseModel, role: Role = Role.user
+) -> SendMessageRequest:
+    """Creates a complete SendMessageRequest from a Pydantic model payload."""
+    message = create_a2a_message_from_payload(payload, role=role)
+    send_params = MessageSendParams(message=message)
+    return SendMessageRequest(id=str(uuid.uuid4()), params=send_params)

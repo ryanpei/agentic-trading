@@ -1,7 +1,5 @@
 from common.models import PortfolioState, TradeProposal
 from riskguard.rules import check_trade_risk_logic
-import pytest
-from pydantic import ValidationError
 
 
 def test_risk_check_with_very_small_limits(riskguard_input_data_factory):
@@ -175,16 +173,28 @@ def test_risk_check_reject_insufficient_shares(riskguard_input_data_factory):
     assert "Insufficient shares to sell" in result.reason
 
 
-def test_risk_check_reject_unknown_action():
+def test_risk_check_reject_unknown_action(riskguard_input_data_factory):
     """Tests check_trade_risk_logic rejects a trade with unknown action."""
-    with pytest.raises(ValidationError):
-        TradeProposal(action="HOLD", ticker="TECH", quantity=100, price=100.0)
+    input_data = riskguard_input_data_factory(
+        trade_proposal=TradeProposal(
+            action="BUY", ticker="TECH", quantity=100, price=100.0
+        )
+    )
+    input_data.trade_proposal.action = "HOLD"  # Manually set invalid action
+    result = check_trade_risk_logic(
+        trade_proposal=input_data.trade_proposal,
+        portfolio_state=input_data.portfolio_state,
+    )
+    assert result.approved is False
+    assert "Unknown trade action" in result.reason
 
 
 def test_risk_check_invalid_input(riskguard_input_data_factory):
     """Tests check_trade_risk_logic handles invalid input data."""
     input_data = riskguard_input_data_factory(
-        trade_proposal={"price": 100.0, "quantity": -10},
+        trade_proposal=TradeProposal(
+            action="BUY", ticker="TECH", quantity=-10, price=100.0
+        )
     )
     result = check_trade_risk_logic(
         trade_proposal=input_data.trade_proposal,
@@ -228,3 +238,25 @@ def test_risk_check_approve_exact_cash(riskguard_input_data_factory):
     )
     assert result.approved is True
     assert result.reason == "Trade adheres to risk rules."
+
+
+def test_risk_check_division_by_zero(riskguard_input_data_factory):
+    """
+    Tests that check_trade_risk_logic handles a portfolio with a total value of
+    zero gracefully, preventing a ZeroDivisionError.
+    """
+    input_data = riskguard_input_data_factory(
+        trade_proposal=TradeProposal(
+            action="BUY", ticker="TECH", quantity=10, price=100.0
+        ),
+        portfolio_state=PortfolioState(cash=0.0, shares=0, total_value=0.0),
+        max_concentration=0.5,
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data.trade_proposal,
+        portfolio_state=input_data.portfolio_state,
+        max_concentration=input_data.max_concentration,
+    )
+    # In this scenario, the trade should be rejected because there is no cash.
+    assert result.approved is False
+    assert "Invalid total portfolio value for risk check." in result.reason
