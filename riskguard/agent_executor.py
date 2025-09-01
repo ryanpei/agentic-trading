@@ -33,6 +33,10 @@ class RiskGuardAgentExecutor(AgentExecutor):
         logger.info("RiskGuardAgentExecutor initialized with ADK Runner.")
 
     async def execute(self, context: RequestContext, event_queue: EventQueue):
+        if not context.task_id or not context.context_id:
+            logger.error("Task ID or Context ID is missing, cannot execute.")
+            return
+
         task_updater = TaskUpdater(event_queue, context.task_id, context.context_id)
 
         if not context.current_task:

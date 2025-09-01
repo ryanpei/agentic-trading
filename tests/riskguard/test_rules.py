@@ -1,0 +1,160 @@
+from riskguard.rules import check_trade_risk_logic
+
+
+def test_risk_check_with_very_small_limits(riskguard_input_data_factory):
+    """Test risk check with very small limit values."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"ticker": "SMALL", "quantity": 1, "price": 0.01},
+        portfolio_state={"cash": 0.01, "total_value": 0.01},
+        max_pos_size=0.001,
+        max_concentration=0.001,
+    )
+
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+        max_pos_size=input_data["max_pos_size"],
+        max_concentration=input_data["max_concentration"],
+    )
+
+    assert result.approved is False
+
+
+def test_risk_check_with_very_large_limits(riskguard_input_data_factory):
+    """Test risk check with very large limit values."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"ticker": "LARGE", "quantity": 1000000, "price": 1000.0},
+        portfolio_state={"cash": 1000000000.0, "total_value": 1000000000.0},
+        max_pos_size=10000000000.0,
+        max_concentration=1.0,
+    )
+
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+        max_pos_size=input_data["max_pos_size"],
+        max_concentration=input_data["max_concentration"],
+    )
+
+    assert result.approved is False
+
+
+def test_risk_check_approve_valid_trade(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic approves a valid trade."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 10, "price": 150.0},
+        portfolio_state={"cash": 10000.0, "shares": 0, "total_value": 10000.0},
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+    )
+    assert result.approved is True
+    assert result.reason == "Trade adheres to risk rules."
+
+
+def test_risk_check_reject_pos_size(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic rejects a trade exceeding max position size."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 60, "price": 100.0},
+        portfolio_state={"cash": 10000.0, "shares": 0, "total_value": 10000.0},
+        max_pos_size=5000,
+        max_concentration=1.0,  # Ensure concentration doesn't block
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+        max_pos_size=input_data["max_pos_size"],
+        max_concentration=input_data["max_concentration"],
+    )
+    assert result.approved is False
+    assert "Exceeds max position size per trade" in result.reason
+
+
+def test_risk_check_reject_insufficient_cash(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic rejects a BUY trade with insufficient cash."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 100, "price": 150.0},
+        portfolio_state={"cash": 1000.0, "shares": 0, "total_value": 1000.0},
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+    )
+    assert result.approved is False
+    assert "Insufficient cash" in result.reason
+
+
+def test_risk_check_reject_concentration_limit(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic rejects a trade exceeding concentration limit."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 50, "price": 100.0},
+        portfolio_state={"cash": 10000.0, "shares": 0, "total_value": 10000.0},
+        max_concentration=0.3,
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+        max_concentration=input_data["max_concentration"],
+    )
+    assert result.approved is False
+    assert "Exceeds max asset concentration" in result.reason
+
+
+def test_risk_check_reject_insufficient_shares(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic rejects a SELL trade with insufficient shares."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"action": "SELL", "quantity": 100, "price": 100.0},
+        portfolio_state={"cash": 10000.0, "shares": 50, "total_value": 15000.0},
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+    )
+    assert result.approved is False
+    assert "Insufficient shares to sell" in result.reason
+
+
+def test_risk_check_reject_unknown_action(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic rejects a trade with unknown action."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"action": "HOLD", "quantity": 100, "price": 100.0},
+        portfolio_state={"cash": 10000.0, "shares": 50, "total_value": 15000.0},
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+    )
+    assert result.approved is False
+    assert "Unknown trade action" in result.reason
+
+
+def test_risk_check_invalid_input(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic handles invalid input data."""
+    # Missing required fields in trade_proposal
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"price": 100.0},
+        portfolio_state={"cash": 10000.0, "shares": 0, "total_value": 10000.0},
+    )
+    # The factory will add default quantity, so we need to remove it after creation
+    del input_data["trade_proposal"]["quantity"]
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+    )
+    assert result.approved is False
+    assert "Invalid trade proposal" in result.reason
+
+
+def test_risk_check_zero_values(riskguard_input_data_factory):
+    """Tests check_trade_risk_logic handles zero values correctly."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 0, "price": 0.0},
+        portfolio_state={"cash": 10000.0, "shares": 0, "total_value": 10000.0},
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+    )
+    assert result.approved is False
+    assert "Trade quantity and price must be positive." in result.reason

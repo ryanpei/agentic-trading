@@ -22,15 +22,23 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # A2A SDK Imports
-from a2a.client import A2AClient, A2AClientHTTPError, A2AClientJSONError
-from a2a.types import DataPart as A2ADataPart
-from a2a.types import JSONRPCErrorResponse  # Added
-from a2a.types import SendMessageSuccessResponse  # Added
-from a2a.types import Message as A2AMessage
-from a2a.types import MessageSendConfiguration, MessageSendParams
-from a2a.types import Role as A2ARole
-from a2a.types import SendMessageRequest, SendMessageResponse
-from a2a.types import Task as A2ATask
+from a2a.client import (
+    A2AClient,
+    A2AClientHTTPError,
+    A2AClientJSONError,
+)
+from a2a.types import (
+    DataPart as A2ADataPart,
+    JSONRPCErrorResponse,
+    SendMessageSuccessResponse,
+    Message as A2AMessage,
+    MessageSendConfiguration,
+    MessageSendParams,
+    Role as A2ARole,
+    SendMessageRequest,
+    SendMessageResponse,
+    Part,
+)
 from common.config import (
     DEFAULT_SIMULATOR_PORT,
 )  # Keep this for the uvicorn runner at the bottom
@@ -365,31 +373,29 @@ async def _call_alphabot_a2a(
 
     # Construct a2a.types.Message for the new SDK
     sdk_message = A2AMessage(
-        contextId=session_id,
-        messageId=str(uuid.uuid4()),
+        context_id=session_id,
+        message_id=str(uuid.uuid4()),
         role=A2ARole.user,
         parts=[
-            A2ADataPart(
-                data=market_data_part_data["market_data"]
-            ),  # Pass data directly
-            A2ADataPart(data=portfolio_state_part_data["portfolio_state"]),
+            Part(root=A2ADataPart(data=market_data_part_data["market_data"])),
+            Part(root=A2ADataPart(data=portfolio_state_part_data["portfolio_state"])),
         ],
         metadata=agent_params_metadata,
     )
     sdk_send_params = MessageSendParams(
         message=sdk_message,
         configuration=MessageSendConfiguration(
-            acceptedOutputModes=[
+            accepted_output_modes=[
                 "data",
                 "application/json",
-            ]  # As per old TaskSendParams
+            ]
         ),
     )
     # The id for SendMessageRequest is the JSON-RPC request id, not the task id
     sdk_request = SendMessageRequest(id=str(uuid.uuid4()), params=sdk_send_params)
 
     sim_logger.info(f"--- Calling AlphaBot A2A Server (Session ID: {session_id}) ---")
-    outcome = {
+    outcome: Dict[str, Any] = {
         "approved_trade": None,
         "rejected_trade": None,
         "reason": None,
@@ -415,7 +421,15 @@ async def _call_alphabot_a2a(
         elif isinstance(
             root_response_part, SendMessageSuccessResponse
         ):  # Check if it's a success response
-            task_result: A2ATask = root_response_part.result  # result is of type Task
+            task_result = root_response_part.result
+            if isinstance(task_result, A2AMessage):
+                sim_logger.warning(
+                    "Received a direct message response, expected a task."
+                )
+                outcome["error"] = (
+                    "Received unexpected direct message response from agent."
+                )
+                return outcome
             sim_logger.info(
                 f"A2A Task {task_result.id} completed with state: {task_result.status.state}"
             )
@@ -574,8 +588,6 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
         async with httpx.AsyncClient() as http_client:
             try:
                 a2a_client = A2AClient(httpx_client=http_client, url=alphabot_url)
-                # Optionally, could try to fetch agent card here to verify connection early
-                # await a2a_client.get_client_from_agent_card_url(http_client, alphabot_url.rsplit('/',1)[0] if '/' in alphabot_url else alphabot_url)
             except Exception as e:  # More specific httpx errors could be caught
                 sim_logger.error(
                     f"Failed to initialize A2AClient for AlphaBot at {alphabot_url}: {e}"

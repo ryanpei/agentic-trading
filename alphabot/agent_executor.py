@@ -41,6 +41,10 @@ class AlphaBotAgentExecutor(AgentExecutor):
         logger.info("AlphaBotAgentExecutor initialized with ADK Runner.")
 
     async def execute(self, context: RequestContext, event_queue: EventQueue):
+        if not context.task_id or not context.context_id:
+            logger.error("Task ID or Context ID is missing, cannot execute.")
+            return
+
         task_updater = TaskUpdater(event_queue, context.task_id, context.context_id)
 
         if (
@@ -271,9 +275,10 @@ class AlphaBotAgentExecutor(AgentExecutor):
                     parts=[Part(root=DataPart(data={"error": f"ADK Agent error: {e}"}))]
                 )
             )
+            return
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue):
         logger.warning(
             f"Cancellation not implemented for AlphaBot ADK agent task: {context.task_id}"
         )
-        task_updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        pass
