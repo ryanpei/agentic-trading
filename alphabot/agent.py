@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Optional
 
 # Import defaults from the central config
 from common.config import (
@@ -49,8 +49,8 @@ class AlphaBotInput(BaseModel):
 
 
 class AlphaBotAgent(BaseAgent):
-    ticker: str
-    tools: List[BaseTool]
+    ticker: Optional[str] = None
+    tools: Optional[List[BaseTool]] = None
 
     def __init__(
         self,
@@ -65,10 +65,10 @@ class AlphaBotAgent(BaseAgent):
         super().__init__(
             name=agent_name,
             description=agent_description,
-            tools=[a2a_tool],
-            ticker=stock_ticker,
             **kwargs,
         )
+        self.tools = [a2a_tool]
+        self.ticker = stock_ticker
         logger.debug(f"[{self.name}] Initialized with ticker: {self.ticker}")
 
     def _calculate_indicators(
@@ -236,9 +236,11 @@ class AlphaBotAgent(BaseAgent):
             f"[{self.name} ({invocation_id_short})] A2A Tool Args: {tool_args}"
         )
 
-        a2a_risk_tool_instance = next(
-            (t for t in self.tools if isinstance(t, A2ARiskCheckTool)), None
-        )
+        a2a_risk_tool_instance = None
+        if self.tools is not None:
+            a2a_risk_tool_instance = next(
+                (t for t in self.tools if isinstance(t, A2ARiskCheckTool)), None
+            )
 
         if not a2a_risk_tool_instance:
             logger.error(
@@ -349,6 +351,7 @@ class AlphaBotAgent(BaseAgent):
                 parts=[genai_types.Part(text=final_event_text)]
             ),
             actions=EventActions(state_delta=state_delta_content),
+            turn_complete=True,
         )
 
     async def _run_async_impl(
@@ -378,6 +381,7 @@ class AlphaBotAgent(BaseAgent):
                         )
                     ]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (Invalid Input) <<<"
@@ -413,6 +417,7 @@ class AlphaBotAgent(BaseAgent):
                         )
                     ]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (Insufficient Market Data) <<<"
@@ -431,6 +436,7 @@ class AlphaBotAgent(BaseAgent):
                 content=genai_types.Content(
                     parts=[genai_types.Part(text="No signal yet (calculating SMAs).")]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (Not enough history for SMAs) <<<"
@@ -455,6 +461,7 @@ class AlphaBotAgent(BaseAgent):
                     ]
                 ),
                 actions=EventActions(state_delta={"should_be_long": False}),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (State Corrected) <<<"
@@ -476,6 +483,7 @@ class AlphaBotAgent(BaseAgent):
                 content=genai_types.Content(
                     parts=[genai_types.Part(text=f"No signal ({reason_no_signal}).")]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (No Signal) <<<"
@@ -503,6 +511,7 @@ class AlphaBotAgent(BaseAgent):
                         )
                     ]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (No Trade Proposal Needed) <<<"
@@ -541,6 +550,7 @@ class AlphaBotAgent(BaseAgent):
                 content=genai_types.Content(
                     parts=[genai_types.Part(text="Error during risk check.")]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (Risk Check Error) <<<"
@@ -560,6 +570,7 @@ class AlphaBotAgent(BaseAgent):
                         )
                     ]
                 ),
+                turn_complete=True,
             )
             logger.info(
                 f"[{self.name} ({invocation_id_short})] >>> Invocation END (Null Risk Result) <<<"

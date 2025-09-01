@@ -1,119 +1,151 @@
-import unittest
+import pytest
+from typing import Callable
 
-from a2a.types import DataPart, Message, Part
-
+from a2a.types import Message, DataPart, Part, Role
 from riskguard.agent_executor import RiskGuardAgentExecutor
-from tests.test_agent_executor_base import AgentExecutorTestBase
+from tests.conftest import adk_mock_riskguard_generator, run_executor_test
 
 
-class TestRiskGuardAgentExecutor(AgentExecutorTestBase):
-    AGENT_EXECUTOR_CLASS = RiskGuardAgentExecutor
-    AGENT_EXECUTOR_PATH = "riskguard.agent_executor"
+@pytest.fixture
+def riskguard_message_factory(
+    riskguard_input_data_factory,
+) -> Callable[..., Message]:
+    """Factory to create a complete A2A Message for RiskGuard tests."""
 
-    def test_execute_success_approved(self):
-        # Arrange
-        self.mock_runner_instance.run_async.return_value = (
-            self.adk_mock_riskguard_generator(
-                result_name="risk_check_result",
-                result_data={"approved": True, "reason": "Within risk parameters."},
+    def _create_message(**kwargs) -> Message:
+        input_data = riskguard_input_data_factory(**kwargs)
+        return Message(
+            message_id="test_message_id",
+            role=Role.user,
+            parts=[Part(root=DataPart(data=input_data))],
+        )
+
+    return _create_message
+
+
+@pytest.mark.asyncio
+async def test_execute_success_approved(
+    riskguard_message_factory, mock_runner, task_updater_fixture
+):
+    """Test with a simplified message creation."""
+    mock_runner_instance = mock_runner.return_value
+    task_updater, mock_event_queue = task_updater_fixture(
+        "test-task-123", "test-context-456"
+    )
+
+    # Arrange
+    request_message = riskguard_message_factory(
+        trade_proposal={"quantity": 10}, portfolio_state={"cash": 50000}
+    )
+    mock_runner_instance.run_async.return_value = adk_mock_riskguard_generator(
+        result_name="risk_check_result",
+        result_data={"approved": True, "reason": "Within risk parameters."},
+    )
+
+    # Act
+    executor = RiskGuardAgentExecutor()
+    await run_executor_test(
+        executor,
+        request_message,
+        mock_runner_instance,
+        task_updater=task_updater,
+    )
+
+    # Assert
+    assert mock_runner_instance.run_async.call_count == 1
+    assert (
+        mock_event_queue.enqueue_event.call_count == 4
+    )  # submit, start, artifact, complete
+
+    submit_call = mock_event_queue.enqueue_event.call_args_list[0]
+    assert submit_call.args[0].status.state == "submitted"
+
+    start_call = mock_event_queue.enqueue_event.call_args_list[1]
+    assert start_call.args[0].status.state == "working"
+
+    artifact_call = mock_event_queue.enqueue_event.call_args_list[2]
+    expected_artifact = {"approved": True, "reason": "Within risk parameters."}
+    assert artifact_call.args[0].artifact.parts[0].root.data == expected_artifact
+
+    complete_call = mock_event_queue.enqueue_event.call_args_list[3]
+    assert complete_call.args[0].status.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_execute_missing_trade_proposal(mock_runner, task_updater_fixture):
+    mock_runner_instance = mock_runner.return_value
+    task_updater, mock_event_queue = task_updater_fixture(
+        "test-task-123", "test-context-456"
+    )
+
+    # Arrange
+    request_message = Message(
+        message_id="test_message_id",
+        role=Role.user,
+        parts=[
+            Part(
+                root=DataPart(
+                    data={"portfolio_state": {"cash": 10000.0, "shares": 100}}
+                )
             )
-        )
-        request_message = Message(
-            messageId="test_message_id",
-            role="user",
-            parts=[
-                Part(
-                    root=DataPart(
-                        data={
-                            "trade_proposal": {"action": "BUY", "quantity": 10},
-                            "portfolio_state": {"cash": 10000.0, "shares": 100},
-                        }
-                    )
-                )
-            ],
-        )
+        ],
+    )
 
-        # Act
-        self._run_execute(request_message, context_id="test_session_id")
+    # Act
+    executor = RiskGuardAgentExecutor()
+    await run_executor_test(
+        executor,
+        request_message,
+        mock_runner_instance,
+        task_updater=task_updater,
+    )
 
-        # Assert
-        self.mock_task_updater_instance.start_work.assert_called_once()
-        self.assertEqual(self.mock_runner_instance.run_async.call_count, 1)
-        self.mock_task_updater_instance.add_artifact.assert_called_once()
-        artifact_call_kwargs = (
-            self.mock_task_updater_instance.add_artifact.call_args.kwargs
-        )
-        expected_artifact = {"approved": True, "reason": "Within risk parameters."}
-        self.assertEqual(artifact_call_kwargs["parts"][0].root.data, expected_artifact)
-        self.mock_task_updater_instance.complete.assert_called_once()
-        self.mock_task_updater_instance.failed.assert_not_called()
+    # Assert
+    assert mock_event_queue.enqueue_event.call_count == 3  # submit, start, failed
+    submit_call = mock_event_queue.enqueue_event.call_args_list[0]
+    assert submit_call.args[0].status.state == "submitted"
 
-    def test_execute_missing_trade_proposal(self):
-        # Arrange
-        self.mock_task_updater_instance.new_agent_message.return_value = Message(
-            messageId="new_message",
-            role="agent",
-            parts=[Part(root=DataPart(data={"error": "Invalid input data"}))],
-        )
-        request_message = Message(
-            messageId="test_message_id",
-            role="user",
-            parts=[
-                Part(
-                    root=DataPart(
-                        data={"portfolio_state": {"cash": 10000.0, "shares": 100}}
-                    )
-                )
-            ],
-        )
+    start_call = mock_event_queue.enqueue_event.call_args_list[1]
+    assert start_call.args[0].status.state == "working"
 
-        # Act
-        self._run_execute(request_message)
-
-        # Assert
-        self.mock_task_updater_instance.start_work.assert_called_once()
-        self.mock_task_updater_instance.failed.assert_called_once()
-        fail_kwargs = self.mock_task_updater_instance.failed.call_args.kwargs
-        fail_message = fail_kwargs["message"]
-        self.assertIn("Invalid input data", str(fail_message.parts[0].root.data))
-        self.mock_runner_instance.run_async.assert_not_called()
-
-    def test_execute_adk_runner_exception(self):
-        # Arrange
-        self.mock_runner_instance.run_async.side_effect = Exception("ADK Borked")
-        self.mock_task_updater_instance.new_agent_message.return_value = Message(
-            messageId="new_message",
-            role="agent",
-            parts=[Part(root=DataPart(data={"error": "ADK Agent error: ADK Borked"}))],
-        )
-        request_message = Message(
-            messageId="test_message_id",
-            role="user",
-            parts=[
-                Part(
-                    root=DataPart(
-                        data={
-                            "trade_proposal": {"action": "BUY", "quantity": 10},
-                            "portfolio_state": {"cash": 10000.0, "shares": 100},
-                        }
-                    )
-                )
-            ],
-        )
-
-        # Act
-        self._run_execute(request_message)
-
-        # Assert
-        self.mock_task_updater_instance.start_work.assert_called_once()
-        self.mock_task_updater_instance.failed.assert_called_once()
-        fail_kwargs = self.mock_task_updater_instance.failed.call_args.kwargs
-        fail_message = fail_kwargs["message"]
-        self.assertIn(
-            "ADK Agent error: ADK Borked", str(fail_message.parts[0].root.data)
-        )
-        self.mock_task_updater_instance.complete.assert_not_called()
+    fail_call = mock_event_queue.enqueue_event.call_args_list[2]
+    assert fail_call.args[0].status.state == "failed"
+    fail_message = fail_call.args[0].status.message
+    assert "Invalid input data" in str(fail_message.parts[0].root.data)
+    mock_runner_instance.run_async.assert_not_called()
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.asyncio
+async def test_execute_adk_runner_exception(
+    riskguard_message_factory, mock_runner, task_updater_fixture
+):
+    mock_runner_instance = mock_runner.return_value
+    task_updater, mock_event_queue = task_updater_fixture(
+        "test-task-123", "test-context-456"
+    )
+
+    # Arrange
+    mock_runner_instance.run_async.side_effect = Exception("ADK Borked")
+    request_message = riskguard_message_factory()
+
+    # Act
+    executor = RiskGuardAgentExecutor()
+    await run_executor_test(
+        executor,
+        request_message,
+        mock_runner_instance,
+        task_updater=task_updater,
+    )
+
+    # Assert
+    assert mock_event_queue.enqueue_event.call_count == 3  # submit, start, failed
+    submit_call = mock_event_queue.enqueue_event.call_args_list[0]
+    assert submit_call.args[0].status.state == "submitted"
+
+    start_call = mock_event_queue.enqueue_event.call_args_list[1]
+    assert start_call.args[0].status.state == "working"
+
+    fail_call = mock_event_queue.enqueue_event.call_args_list[2]
+    assert fail_call.args[0].status.state == "failed"
+    fail_message = fail_call.args[0].status.message
+    assert "ADK Agent error: ADK Borked" in str(fail_message.parts[0].root.data)

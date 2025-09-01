@@ -42,21 +42,29 @@ def check_trade_risk_logic(
     action = trade_proposal.get("action")
     quantity = trade_proposal.get("quantity")
     price = trade_proposal.get("price")
-    if (
-        not all(
-            [
-                ticker,
-                isinstance(action, str),
-                isinstance(quantity, int),
-                isinstance(price, float),
-            ]
-        )
-        or quantity <= 0
-        or price <= 0
+
+    # Ensure all required fields are present and have correct types
+    if not (
+        ticker
+        and isinstance(action, str)
+        and isinstance(
+            quantity, (int, float)
+        )  # Allow float for quantity if needed, though int is preferred
+        and isinstance(price, (int, float))
     ):
-        logger.warning("Invalid trade proposal structure or values.")
+        logger.warning(
+            "Invalid trade proposal structure or values (missing fields or wrong types)."
+        )
         return RiskCheckResult(
-            approved=False, reason="Invalid trade proposal structure or values."
+            approved=False,
+            reason="Invalid trade proposal structure or values (missing fields or wrong types).",
+        )
+
+    # Ensure quantity and price are positive
+    if quantity <= 0 or price <= 0:
+        logger.warning("Trade quantity and price must be positive.")
+        return RiskCheckResult(
+            approved=False, reason="Trade quantity and price must be positive."
         )
 
     # Get portfolio details safely
@@ -74,9 +82,9 @@ def check_trade_risk_logic(
 
     if action_upper == "BUY":
         # Rule 1 (BUY): Sufficient Cash
-        if proposed_trade_value > cash:
+        if proposed_trade_value >= cash:  # Changed from > to >=
             reason = (
-                f"Insufficient cash ({cash:.2f} < required {proposed_trade_value:.2f})"
+                f"Insufficient cash ({cash:.2f} <= required {proposed_trade_value:.2f})"
             )
             logger.warning(f"REJECTED - {reason}")
             return RiskCheckResult(approved=False, reason=reason)
