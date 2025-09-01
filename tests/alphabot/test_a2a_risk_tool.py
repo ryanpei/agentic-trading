@@ -11,6 +11,7 @@ from a2a.types import (
     DataPart,
     TaskState,
     Part,
+    Message,
 )
 from google.adk.tools import ToolContext
 
@@ -61,26 +62,38 @@ def create_success_response(result_data: dict) -> SendMessageSuccessResponse:
     )
 
 
+def _verify_a2a_call(
+    mock_a2a_client: MagicMock, expected_trade_proposal: dict, expected_portfolio_state: dict
+):
+    """Helper function to verify the payload sent to the A2AClient."""
+    mock_a2a_client.send_message.assert_awaited_once()
+    sent_request = mock_a2a_client.send_message.call_args[0][0]
+    sent_message: Message = sent_request.params.message
+    sent_part = sent_message.parts[0].root
+    assert isinstance(sent_part, DataPart)
+    sent_payload = sent_part.data
+    assert isinstance(sent_payload, dict)
+    assert sent_payload["trade_proposal"] == expected_trade_proposal
+    assert sent_payload["portfolio_state"] == expected_portfolio_state
+
+
 @pytest.mark.asyncio
 async def test_run_async_approved(
     risk_check_tool,
     tool_context,
     mock_a2a_client,
-    base_trade_proposal,  # <-- Use fixture
-    base_portfolio_state,  # <-- Use fixture
+    base_trade_proposal,
+    base_portfolio_state,
 ):
     """Test using shared fixtures for input data."""
     # Arrange
-    # The base fixtures provide the data, reducing inline definitions
     args = {
         "trade_proposal": base_trade_proposal,
         "portfolio_state": base_portfolio_state,
     }
-
     expected_result = {"approved": True, "reason": "Within limits"}
     mock_response = create_success_response(expected_result)
 
-    # We need to patch the A2AClient constructor within the run_async method
     with patch(
         "alphabot.a2a_risk_tool.A2AClient", return_value=mock_a2a_client
     ) as mock_client_constructor:
@@ -99,9 +112,10 @@ async def test_run_async_approved(
         response_data = response_part.function_response.response
         assert response_data == expected_result
 
-        # Verify the A2AClient was called correctly
         mock_client_constructor.assert_called_once()
-        mock_a2a_client.send_message.assert_awaited_once()
+        _verify_a2a_call(
+            mock_a2a_client, base_trade_proposal, base_portfolio_state
+        )
 
 
 @pytest.mark.asyncio
@@ -118,7 +132,6 @@ async def test_run_async_rejected(
         "trade_proposal": base_trade_proposal,
         "portfolio_state": base_portfolio_state,
     }
-
     expected_result = {"approved": False, "reason": "Exceeds max position size"}
     mock_response = create_success_response(expected_result)
 
@@ -141,3 +154,6 @@ async def test_run_async_rejected(
         assert response_data == expected_result
 
         mock_client_constructor.assert_called_once()
+        _verify_a2a_call(
+            mock_a2a_client, base_trade_proposal, base_portfolio_state
+        )

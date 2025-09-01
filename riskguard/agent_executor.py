@@ -6,10 +6,6 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import DataPart, Part
-from common.config import (
-    DEFAULT_RISKGUARD_MAX_CONCENTRATION,
-    DEFAULT_RISKGUARD_MAX_POS_SIZE,
-)
 from google.adk import Runner
 from google.adk.sessions import InMemorySessionService, Session
 from google.genai import types as genai_types
@@ -47,21 +43,19 @@ class RiskGuardAgentExecutor(AgentExecutor):
             )
         )
 
-        trade_proposal: dict[str, Any] | None = None
-        portfolio_state: dict[str, Any] | None = None
-
+        agent_input_data = None
         if context.message and context.message.parts:
-            for part_union in context.message.parts:
-                part = part_union.root  # Access the actual Part model
-                if isinstance(part, DataPart):
-                    if "trade_proposal" in part.data:
-                        trade_proposal = part.data["trade_proposal"]
-                    if "portfolio_state" in part.data:
-                        portfolio_state = part.data["portfolio_state"]
+            part = context.message.parts[0].root
+            if isinstance(part, DataPart):
+                agent_input_data = part.data
 
-        if not trade_proposal or not portfolio_state:
+        if (
+            not agent_input_data
+            or "trade_proposal" not in agent_input_data
+            or "portfolio_state" not in agent_input_data
+        ):
             logger.error(
-                f"Task {context.task_id}: Missing 'trade_proposal' or 'portfolio_state'"
+                f"Task {context.task_id}: Missing 'trade_proposal' or 'portfolio_state' in data payload"
             )
             await task_updater.failed(
                 message=task_updater.new_agent_message(
@@ -69,19 +63,6 @@ class RiskGuardAgentExecutor(AgentExecutor):
                 )
             )
             return
-
-        risk_metadata = (context.message.metadata or {}) if context.message else {}
-        max_pos_size = risk_metadata.get("max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE)
-        max_concentration = risk_metadata.get(
-            "max_concentration", DEFAULT_RISKGUARD_MAX_CONCENTRATION
-        )
-
-        agent_input_data = {
-            "trade_proposal": trade_proposal,
-            "portfolio_state": portfolio_state,
-            "max_pos_size": max_pos_size,
-            "max_concentration": max_concentration,
-        }
         agent_input_json = json.dumps(agent_input_data)
         adk_content = genai_types.Content(
             parts=[genai_types.Part(text=agent_input_json)]

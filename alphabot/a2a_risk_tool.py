@@ -11,7 +11,6 @@ from a2a.types import (
     JSONRPCErrorResponse,
     Message,
     MessageSendParams,
-    Part,
     Role,
     SendMessageRequest,
     SendMessageResponse,
@@ -24,6 +23,8 @@ from common.config import (
     DEFAULT_RISKGUARD_MAX_POS_SIZE,
     DEFAULT_RISKGUARD_URL,
 )
+from common.models import TradeProposal, PortfolioState, RiskCheckPayload
+from common.utils.agent_utils import create_a2a_message_from_payload
 from google.adk.events import Event
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types as genai_types  # ADK uses google.genai.types
@@ -194,24 +195,23 @@ class A2ARiskCheckTool(BaseTool):
             f"[{self.name} Tool ({invocation_id_short})] Preparing A2A call to {risk_guard_target_url}"
         )
 
-        # Construct the data payload for RiskGuard, including risk parameters
-        risk_guard_payload = {
-            "trade_proposal": trade_proposal,
-            "portfolio_state": portfolio_state,
-            "max_pos_size": max_pos_size,
-            "max_concentration": max_concentration,
-        }
-        logger.debug(
-            f"[{self.name} Tool ({invocation_id_short})] RiskGuard Payload: {risk_guard_payload}"
+        # --- REFACTORED SECTION ---
+        # 1. Create Pydantic models from your data
+        trade_proposal_model = TradeProposal(**trade_proposal)
+        portfolio_state_model = PortfolioState(**portfolio_state)
+
+        risk_payload = RiskCheckPayload(
+            trade_proposal=trade_proposal_model,
+            portfolio_state=portfolio_state_model,
+            max_pos_size=max_pos_size,
+            max_concentration=max_concentration,
         )
 
-        a2a_message = Message(
-            context_id=tool_context._invocation_context.session.id,
-            message_id=str(uuid.uuid4()),
+        # 2. Use the new helper to create the A2A Message
+        a2a_message = create_a2a_message_from_payload(
+            payload=risk_payload,
             role=Role.user,
-            parts=[
-                Part(root=TextPart(text=json.dumps(risk_guard_payload))),
-            ],
+            context_id=tool_context._invocation_context.session.id,
         )
 
         send_params = MessageSendParams(message=a2a_message)
@@ -350,7 +350,9 @@ class A2ARiskCheckTool(BaseTool):
             turn_complete=True,  # This tool completes its action in one go
         )
 
-    def _extract_result_from_part(self, part_root, invocation_id_short: str) -> dict | None:
+    def _extract_result_from_part(
+        self, part_root, invocation_id_short: str
+    ) -> dict | None:
         """Extract result data from a message part."""
         if isinstance(part_root, TextPart) and part_root.text:
             try:

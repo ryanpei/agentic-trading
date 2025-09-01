@@ -85,7 +85,13 @@ async def test_execute_missing_trade_proposal(mock_runner, task_updater_fixture)
         parts=[
             Part(
                 root=DataPart(
-                    data={"portfolio_state": {"cash": 10000.0, "shares": 100}}
+                    data={
+                        "portfolio_state": {
+                            "cash": 10000.0,
+                            "shares": 100,
+                            "total_value": 20000.0,
+                        }
+                    }
                 )
             )
         ],
