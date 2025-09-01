@@ -18,7 +18,7 @@ def alphabot_message_factory(
         return Message(
             message_id="test_message_id",
             role=Role.user,
-            parts=[Part(root=DataPart(data=input_data.model_dump(mode="json")))],
+            parts=[Part(root=DataPart(data=input_data.model_dump()))],
             kind="message",
         )
 
@@ -197,3 +197,43 @@ async def test_execute_handles_adk_runner_exception(
     assert error_part.data["status"] == "ERROR"
     assert "An unexpected server error occurred." in error_part.data["reason"]
     assert event_queue.is_closed()
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_dict_not_string(
+    alphabot_message_factory,
+    mock_runner_factory,
+    event_queue,
+    adk_mock_alphabot_generator,
+):
+    """
+    Ensures the final `DataPart` contains a dictionary, not a JSON string.
+    This prevents a `ValidationError` at runtime.
+    """
+    mock_runner_instance = mock_runner_factory("alphabot.agent_executor")
+
+    # Arrange
+    request_message = alphabot_message_factory(
+        historical_prices=[150.0, 151.0, 152.0], current_price=155.0, day=1
+    )
+    mock_runner_instance.run_async.return_value = adk_mock_alphabot_generator(
+        final_state_delta={"approved_trade": {"action": "BUY", "quantity": 10}},
+        final_reason="SMA crossover indicates buy signal.",
+    )
+
+    # Act
+    executor = AlphaBotAgentExecutor()
+    executor._adk_runner = mock_runner_instance
+    await executor.execute(
+        context=RequestContext(
+            request=MessageSendParams(message=request_message),
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=event_queue,
+    )
+
+    # Assert
+    enqueued_message = await event_queue.dequeue_event()
+    data_part = enqueued_message.parts[0].root
+    assert isinstance(data_part.data, dict)

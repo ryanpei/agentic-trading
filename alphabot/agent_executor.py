@@ -112,7 +112,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
                 }
             outcome = TradeOutcome.model_validate(trade_decision)
             final_message = new_agent_parts_message(
-                parts=[Part(root=DataPart(data=outcome.model_dump(mode="json")))],
+                parts=[Part(root=DataPart(data=outcome.model_dump()))],
                 context_id=context.context_id,
                 task_id=context.task_id,
             )
@@ -122,7 +122,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
             logger.error(f"Error during agent execution: {e}", exc_info=True)
             outcome = TradeOutcome(status=TradeStatus.ERROR, reason=str(e))
             final_message = new_agent_parts_message(
-                parts=[Part(root=DataPart(data=outcome.model_dump(mode="json")))],
+                parts=[Part(root=DataPart(data=outcome.model_dump()))],
                 context_id=context.context_id,
                 task_id=context.task_id,
             )
@@ -133,7 +133,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
                 status=TradeStatus.ERROR, reason="An unexpected server error occurred."
             )
             final_message = new_agent_parts_message(
-                parts=[Part(root=DataPart(data=outcome.model_dump(mode="json")))],
+                parts=[Part(root=DataPart(data=outcome.model_dump()))],
                 context_id=context.context_id,
                 task_id=context.task_id,
             )
