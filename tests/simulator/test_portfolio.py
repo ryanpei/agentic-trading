@@ -51,12 +51,8 @@ def test_portfolio_execute_buy_trade_sufficient_funds():
     assert result is True
     assert portfolio.cash == 9000.0  # $10000 - (10 * $100)
     assert portfolio.shares == 10  # 0 + 10
-    assert (
-        portfolio.holdings_value == 0.0
-    )  # Not updated until update_valuation is called
-    assert (
-        portfolio.total_value == 100000.0
-    )  # Not updated until update_valuation is called, but default value is 100000.0
+    assert portfolio.holdings_value == 1000.0
+    assert portfolio.total_value == 10000.0
 
 
 def test_portfolio_execute_buy_trade_insufficient_funds():

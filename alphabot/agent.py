@@ -2,7 +2,6 @@ import logging
 import uuid
 from typing import AsyncGenerator, List, Optional
 
-# Import defaults from the central config
 from common.config import (
     DEFAULT_ALPHABOT_LONG_SMA,
     DEFAULT_ALPHABOT_SHORT_SMA,
@@ -15,7 +14,6 @@ from common.config import (
 from common.utils.agent_utils import parse_and_validate_input
 from common.utils.indicators import calculate_sma
 
-# ADK Imports
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
@@ -28,7 +26,6 @@ from .a2a_risk_tool import A2ARiskCheckTool
 logger = logging.getLogger(__name__)
 
 
-# --- Pydantic Input Model for AlphaBot ---
 class PortfolioStateInput(BaseModel):
     cash: float
     shares: int
@@ -38,7 +35,7 @@ class PortfolioStateInput(BaseModel):
 class AlphaBotInput(BaseModel):
     historical_prices: List[float]
     current_price: float
-    portfolio_state: PortfolioStateInput  # Use the nested model
+    portfolio_state: PortfolioStateInput
     short_sma_period: int = Field(default=DEFAULT_ALPHABOT_SHORT_SMA)
     long_sma_period: int = Field(default=DEFAULT_ALPHABOT_LONG_SMA)
     trade_quantity: int = Field(default=DEFAULT_ALPHABOT_TRADE_QTY)
@@ -160,7 +157,7 @@ class AlphaBotAgent(BaseAgent):
         self,
         signal: str | None,
         current_price: float,
-        portfolio_state: PortfolioStateInput,  # Use Pydantic model
+        portfolio_state: PortfolioStateInput,
         trade_quantity: int,
         current_should_be_long: bool,
         invocation_id: str,
@@ -188,17 +185,23 @@ class AlphaBotAgent(BaseAgent):
                 )
         elif signal == "SELL":
             if current_should_be_long:
-                # portfolio_state is now PortfolioStateInput object
                 if portfolio_state.shares > 0:
-                    trade_proposal = {
-                        "action": "SELL",
-                        "ticker": self.ticker,
-                        "quantity": portfolio_state.shares,  # Sell all
-                        "price": current_price,
-                    }
-                    logger.info(
-                        f"[{self.name} ({invocation_id[:8]})] Proposing SELL {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f}"
-                    )
+                    if trade_quantity > portfolio_state.shares:
+                        logger.info(
+                            f"[{self.name} ({invocation_id[:8]})] SELL Signal, but trade quantity ({trade_quantity}) "
+                            f"exceeds available shares ({portfolio_state.shares}). No trade proposal."
+                        )
+                        trade_proposal = None
+                    else:
+                        trade_proposal = {
+                            "action": "SELL",
+                            "ticker": self.ticker,
+                            "quantity": trade_quantity,
+                            "price": current_price,
+                        }
+                        logger.info(
+                            f"[{self.name} ({invocation_id[:8]})] Proposing SELL {trade_proposal['quantity']} {trade_proposal['ticker']} @ ${trade_proposal['price']:.2f}"
+                        )
                 else:
                     logger.info(
                         f"[{self.name} ({invocation_id[:8]})] SELL Signal, state is long, but no shares held. No trade proposal."
@@ -217,8 +220,8 @@ class AlphaBotAgent(BaseAgent):
     async def _perform_risk_check(
         self,
         trade_proposal: dict,
-        portfolio_state: PortfolioStateInput,  # Use Pydantic model
-        risk_params: dict,  # This contains riskguard_url, max_pos_size, max_concentration
+        portfolio_state: PortfolioStateInput,
+        risk_params: dict,
         ctx: InvocationContext,
     ) -> dict | None:
         """Calls the A2A Risk Check tool and returns the result."""
@@ -229,8 +232,8 @@ class AlphaBotAgent(BaseAgent):
 
         tool_args = {
             "trade_proposal": trade_proposal,
-            "portfolio_state": portfolio_state.model_dump(),  # Convert Pydantic to dict for tool
-            "risk_params": risk_params,  # Pass through extracted risk_params
+            "portfolio_state": portfolio_state.model_dump(),
+            "risk_params": risk_params,
         }
         logger.debug(
             f"[{self.name} ({invocation_id_short})] A2A Tool Args: {tool_args}"
@@ -339,6 +342,19 @@ class AlphaBotAgent(BaseAgent):
             logger.info(
                 f"[{self.name} ({invocation_id_short})] Trade REJECTED by RiskGuard. Reason: {reason}"
             )
+            # Even if a trade is rejected, we still want to set the 'should_be_long' state
+            # to indicate the agent's intention. This prevents the agent from immediately
+            # re-proposing the same trade.
+            if signal == "BUY":
+                new_should_be_long_value = True
+            elif signal == "SELL":
+                new_should_be_long_value = False
+
+            if new_should_be_long_value is not None:
+                state_delta_content["should_be_long"] = new_should_be_long_value
+                logger.debug(
+                    f"[{self.name} ({invocation_id_short})] Setting 'should_be_long' in state_delta to: {new_should_be_long_value} (rejected trade)"
+                )
             state_delta_content["rejected_trade_proposal"] = trade_proposal
             final_event_text = f"Trade Rejected (A2A): {reason}"
 
@@ -388,16 +404,12 @@ class AlphaBotAgent(BaseAgent):
             )
             return
 
-        # Use validated_input fields directly
         historical_prices = validated_input.historical_prices
         current_price = validated_input.current_price
-        portfolio_state = (
-            validated_input.portfolio_state
-        )  # This is now PortfolioStateInput model
+        portfolio_state = validated_input.portfolio_state
         short_sma_period = validated_input.short_sma_period
         long_sma_period = validated_input.long_sma_period
         trade_quantity = validated_input.trade_quantity
-        # Risk params are now part of validated_input, passed to _perform_risk_check
         risk_params_for_tool = {
             "riskguard_url": validated_input.riskguard_url,
             "max_pos_size": validated_input.max_pos_size,
@@ -538,7 +550,7 @@ class AlphaBotAgent(BaseAgent):
                 trade_proposal,
                 portfolio_state,
                 risk_params_for_tool,
-                ctx,  # Pass Pydantic portfolio_state and extracted risk_params
+                ctx,
             )
         except Exception as e:
             logger.error(

@@ -513,7 +513,8 @@ async def test_alphabot_run_async_impl_buy_rejected(
         assert final_event.author == agent.name
         assert final_event.turn_complete is True
         assert "Trade Rejected (A2A)" in final_event.content.parts[0].text
-        assert "should_be_long" not in final_event.actions.state_delta
+        assert "should_be_long" in final_event.actions.state_delta
+        assert final_event.actions.state_delta["should_be_long"] is True
         assert "rejected_trade_proposal" in final_event.actions.state_delta
 
 
@@ -744,3 +745,140 @@ async def test_alphabot_concurrency(
             assert final_event.content.parts[0].text is not None
             assert "Trade Approved (A2A)" in final_event.content.parts[0].text
             assert final_event.actions.state_delta["should_be_long"] is True
+
+
+@pytest.mark.asyncio
+async def test_alphabot_does_not_repropose_rejected_trade(
+    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+):
+    """
+    Tests that AlphaBot does not propose the same trade again immediately after
+    it has been rejected by RiskGuard. This test simulates the scenario where
+    a BUY signal is generated, rejected, and then the agent is run again
+    with the same market conditions.
+    """
+    # 1. Initial State: Agent is not long
+    adk_ctx.session.state = {"should_be_long": False}
+
+    # 2. Mock RiskGuard to always REJECT trades
+    with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
+
+        async def mock_tool_response_generator(*args, **kwargs):
+            yield Event(
+                author="a2a_risk_check",
+                content=genai_types.Content(
+                    parts=[
+                        genai_types.Part(
+                            function_response=genai_types.FunctionResponse(
+                                name="risk_check_result",
+                                response={
+                                    "approved": False,
+                                    "reason": "Insufficient cash for BUY.",
+                                },
+                            )
+                        )
+                    ]
+                ),
+                turn_complete=True,
+            )
+
+        mock_run_async.side_effect = mock_tool_response_generator
+
+        # 3. Market data that generates a BUY signal
+        historical_prices = [
+            130,
+            128,
+            126,
+            124,
+            122,
+            120,
+            118,
+            116,
+            114,
+            112,
+            110,
+            108,
+            106,
+            104,
+            102,
+            100,
+            98,
+            96,
+            94,
+            92,
+            90,
+            88,
+            86,
+            84,
+            82,
+            80,
+            78,
+            76,
+            74,
+            72,
+            85,
+            95,
+            105,
+            115,
+            125,
+        ]
+        input_data = alphabot_input_data_factory(
+            historical_prices=historical_prices,
+            current_price=129.0,
+            day=35,
+            portfolio_state={"cash": 100, "shares": 0, "total_value": 100},
+        )
+        adk_ctx.user_content = genai_types.Content(
+            parts=[genai_types.Part(text=json.dumps(input_data))]
+        )
+
+        # --- First Invocation: Propose and get rejected ---
+        events_run1 = [event async for event in agent._run_async_impl(adk_ctx)]
+
+        # Expect a proposal and a rejection
+        assert len(events_run1) == 2
+        final_event_run1 = events_run1[1]
+        assert final_event_run1.content is not None
+        assert final_event_run1.content.parts is not None
+        assert final_event_run1.content.parts[0].text is not None
+        assert "Trade Rejected (A2A)" in final_event_run1.content.parts[0].text
+        assert "should_be_long" in final_event_run1.actions.state_delta
+        assert final_event_run1.actions.state_delta["should_be_long"] is True
+
+        # --- Second Invocation: Should NOT propose again ---
+        # Update the session state with the (empty) delta from the first run
+        adk_ctx.session.state.update(final_event_run1.actions.state_delta)
+
+        # Rerun with the exact same input
+        events_run2 = [event async for event in agent._run_async_impl(adk_ctx)]
+
+        # Assert that NO new trade was proposed
+        assert len(events_run2) == 1
+        final_event_run2 = events_run2[0]
+        assert final_event_run2.content is not None
+        assert final_event_run2.content.parts is not None
+        assert final_event_run2.content.parts[0].text is not None
+        assert (
+            "Signal generated, no action needed"
+            in final_event_run2.content.parts[0].text
+        )
+
+
+def test_determine_trade_proposal_rejects_sell_if_quantity_exceeds_shares(
+    agent: AlphaBotAgent,
+):
+    """
+    Tests that _determine_trade_proposal for a SELL signal returns None if the
+    configured trade_quantity exceeds the number of shares held.
+    """
+    portfolio_state = PortfolioStateInput(cash=10000, shares=5, total_value=10500)
+    trade_quantity = 10  # Attempting to sell more than owned
+    proposal = agent._determine_trade_proposal(
+        signal="SELL",
+        current_price=100.0,
+        portfolio_state=portfolio_state,
+        trade_quantity=trade_quantity,
+        current_should_be_long=True,
+        invocation_id="test_invocation",
+    )
+    assert proposal is None

@@ -82,9 +82,11 @@ def check_trade_risk_logic(
 
     if action_upper == "BUY":
         # Rule 1 (BUY): Sufficient Cash
-        if proposed_trade_value >= cash:  # Changed from > to >=
+        if proposed_trade_value > cash:
             reason = (
-                f"Insufficient cash ({cash:.2f} <= required {proposed_trade_value:.2f})"
+                f"Insufficient cash for BUY. "
+                f"Cost (${proposed_trade_value:,.2f}) "
+                f"exceeds available cash (${cash:,.2f})."
             )
             logger.warning(f"REJECTED - {reason}")
             return RiskCheckResult(approved=False, reason=reason)

@@ -54,6 +54,7 @@ class PortfolioState:
                 return False
             self.cash -= cost
             self.shares += quantity
+            self.update_valuation(price)  # Update valuation after successful trade
             logger.info(f"Executed: BUY {quantity} @ {price_f}")
             return True
         elif action == TradeAction.SELL:
@@ -64,9 +65,10 @@ class PortfolioState:
                 return False
             self.cash += quantity * price
             self.shares -= quantity
+            self.update_valuation(price)  # Update valuation after successful trade
             logger.info(f"Executed: SELL {quantity} @ {price_f}")
             return True
-        # No 'else' needed as TradeAction enum covers all valid cases.
+        # The TradeAction enum covers all valid cases.
         # If an invalid value somehow gets passed, it would raise an error earlier.
         return False  # Should not be reached if using the enum correctly
 

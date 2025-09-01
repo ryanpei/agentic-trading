@@ -44,7 +44,7 @@ from common.config import (
 )  # Keep this for the uvicorn runner at the bottom
 from common.utils.indicators import calculate_sma
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from plotly.subplots import make_subplots
@@ -64,14 +64,6 @@ logger = logging.getLogger(SIMULATOR_UI_LOGGER)
 module_dir = Path(__file__).parent
 templates_dir = module_dir / "templates"
 static_dir = module_dir / "static"
-
-simulation_status = {
-    "is_running": False,
-    "message": None,
-    "is_error": False,
-    "results": None,
-    "params": {},
-}
 
 
 def format_currency(value: Optional[float]) -> str:
@@ -841,8 +833,8 @@ async def read_root(request: Request) -> HTMLResponse:
     logger.info("Serving root page.")
     template_context = {
         "request": request,
-        "status": simulation_status,
-        "params": simulation_status.get("params", {}),
+        "status": {},
+        "params": {},
         "DEFAULT_ALPHABOT_SHORT_SMA": defaults.DEFAULT_ALPHABOT_SHORT_SMA,
         "DEFAULT_ALPHABOT_LONG_SMA": defaults.DEFAULT_ALPHABOT_LONG_SMA,
         "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
@@ -934,8 +926,42 @@ class SimulationRunParams(BaseModel):
         return self.model_dump()
 
 
-@app.post("/run_simulation")
+def _render_error_page(
+    request: Request, error_message: str, form_values: Dict[str, Any]
+) -> HTMLResponse:
+    """Helper function to render the main page with an error message."""
+    template_context = {
+        "request": request,
+        "status": {
+            "message": error_message,
+            "is_error": True,
+        },
+        "params": form_values,
+        "DEFAULT_ALPHABOT_SHORT_SMA": defaults.DEFAULT_ALPHABOT_SHORT_SMA,
+        "DEFAULT_ALPHABOT_LONG_SMA": defaults.DEFAULT_ALPHABOT_LONG_SMA,
+        "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
+        "DEFAULT_ALPHABOT_URL": os.environ.get(
+            "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
+        ).rstrip("/"),
+        "DEFAULT_RISKGUARD_URL": os.environ.get(
+            "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
+        ).rstrip("/"),
+        "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
+        "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
+        "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,
+        "DEFAULT_SIM_INITIAL_CASH": defaults.DEFAULT_SIM_INITIAL_CASH,
+        "DEFAULT_SIM_INITIAL_PRICE": defaults.DEFAULT_SIM_INITIAL_PRICE,
+        "DEFAULT_SIM_VOLATILITY": defaults.DEFAULT_SIM_VOLATILITY,
+        "DEFAULT_SIM_TREND": defaults.DEFAULT_SIM_TREND,
+    }
+    return templates.TemplateResponse(
+        request=request, name="index.html", context=template_context
+    )
+
+
+@app.post("/run_simulation", response_class=HTMLResponse)
 async def handle_run_simulation(
+    request: Request,
     alphabot_short_sma: int = Form(...),
     alphabot_long_sma: int = Form(defaults.DEFAULT_ALPHABOT_LONG_SMA),
     alphabot_trade_qty: int = Form(defaults.DEFAULT_ALPHABOT_TRADE_QTY),
@@ -956,17 +982,24 @@ async def handle_run_simulation(
     ),  # Get from env or default
 ):
     """Handles the simulation run request, validating parameters via Pydantic."""
-    if simulation_status["is_running"]:
-        simulation_status["message"] = (
-            "A simulation is already in progress. Please wait."
-        )
-        simulation_status["is_error"] = True
-        return RedirectResponse("/", status_code=303)
+    # Note: We're removing the check for concurrent simulations as it was causing race conditions
+    # with the global simulation_status dictionary. In a production environment, you might want
+    # to implement a proper queuing mechanism or allow concurrent simulations with proper isolation.
 
-    simulation_status["is_running"] = True
-    simulation_status["message"] = "Simulation started..."
-    simulation_status["is_error"] = False
-    simulation_status["results"] = None
+    form_values = {
+        "alphabot_short_sma": alphabot_short_sma,
+        "alphabot_long_sma": alphabot_long_sma,
+        "alphabot_trade_qty": alphabot_trade_qty,
+        "sim_days": sim_days,
+        "sim_initial_cash": sim_initial_cash,
+        "sim_initial_price": sim_initial_price,
+        "sim_volatility": sim_volatility,
+        "sim_trend": sim_trend,
+        "riskguard_url": riskguard_url,
+        "riskguard_max_pos_size": riskguard_max_pos_size,
+        "riskguard_max_concentration": riskguard_max_concentration,
+        "alphabot_url": alphabot_url,
+    }
 
     try:
         sim_params = SimulationRunParams(
@@ -986,53 +1019,56 @@ async def handle_run_simulation(
         params_dict = sim_params.to_dict()
     except ValidationError as e:
         logger.error(f"Simulation parameter validation failed: {e}")
-        simulation_status["message"] = f"Invalid simulation parameters: {e}"
-        simulation_status["is_error"] = True
-        simulation_status["is_running"] = False
-        # Capture current form values for repopulation, excluding Pydantic models and error
-        form_values = {
-            k: v
-            for k, v in locals().items()
-            if k in SimulationRunParams.model_fields
-            and k not in ["sim_params", "params_dict", "e", "request", "results"]
-        }
-        simulation_status["params"] = form_values
-        return RedirectResponse("/", status_code=303)
+        return _render_error_page(
+            request, f"Invalid simulation parameters: {e}", form_values
+        )
     except Exception as e:  # Catch other unexpected errors during param processing
         logger.error(f"Unexpected error processing parameters: {e}", exc_info=True)
-        simulation_status["message"] = f"Error processing parameters: {e}"
-        simulation_status["is_error"] = True
-        simulation_status["is_running"] = False
-        form_values = {
-            k: v
-            for k, v in locals().items()
-            if k in SimulationRunParams.model_fields
-            and k not in ["sim_params", "params_dict", "e", "request", "results"]
-        }
-        simulation_status["params"] = form_values
-        return RedirectResponse("/", status_code=303)
+        return _render_error_page(
+            request, f"Error processing parameters: {e}", form_values
+        )
 
-    simulation_status["params"] = params_dict
     logger.info(f"Received simulation request with validated params: {params_dict}")
 
     results = await run_simulation_async(params_dict)
 
-    if results.get("success"):
-        simulation_status["message"] = "Simulation completed successfully."
-        simulation_status["is_error"] = False
-        simulation_status["results"] = results
-    else:
-        simulation_status["message"] = (
-            f"Simulation failed: {results.get('error', 'Unknown error')}"
-        )
-        simulation_status["is_error"] = True
-        simulation_status["results"] = {  # Ensure results dict exists for log display
-            "detailed_log": results.get("detailed_log", "No detailed log available.")
-        }
-
-    simulation_status["is_running"] = False
-
-    return RedirectResponse("/", status_code=303)
+    # Render the results directly in the template
+    template_context = {
+        "request": request,
+        "status": {
+            "message": "Simulation completed successfully."
+            if results.get("success")
+            else f"Simulation failed: {results.get('error', 'Unknown error')}",
+            "is_error": not results.get("success"),
+            "results": results
+            if results.get("success")
+            else {
+                "detailed_log": results.get(
+                    "detailed_log", "No detailed log available."
+                )
+            },
+        },
+        "params": params_dict,
+        "DEFAULT_ALPHABOT_SHORT_SMA": defaults.DEFAULT_ALPHABOT_SHORT_SMA,
+        "DEFAULT_ALPHABOT_LONG_SMA": defaults.DEFAULT_ALPHABOT_LONG_SMA,
+        "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
+        "DEFAULT_ALPHABOT_URL": os.environ.get(
+            "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
+        ).rstrip("/"),
+        "DEFAULT_RISKGUARD_URL": os.environ.get(
+            "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
+        ).rstrip("/"),
+        "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
+        "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
+        "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,
+        "DEFAULT_SIM_INITIAL_CASH": defaults.DEFAULT_SIM_INITIAL_CASH,
+        "DEFAULT_SIM_INITIAL_PRICE": defaults.DEFAULT_SIM_INITIAL_PRICE,
+        "DEFAULT_SIM_VOLATILITY": defaults.DEFAULT_SIM_VOLATILITY,
+        "DEFAULT_SIM_TREND": defaults.DEFAULT_SIM_TREND,
+    }
+    return templates.TemplateResponse(
+        request=request, name="index.html", context=template_context
+    )
 
 
 @app.get("/health")
