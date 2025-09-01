@@ -107,7 +107,21 @@ def alphabot_input_data_factory(base_portfolio_state: PortfolioState):
         final_portfolio_state = base_portfolio_state.model_copy(deep=True)
 
         if "portfolio_state" in kwargs:
-            final_portfolio_state = PortfolioState(**kwargs.pop("portfolio_state"))
+            update_data = kwargs.pop("portfolio_state")
+            if isinstance(update_data, dict):
+                merged_data = base_portfolio_state.model_dump()
+                merged_data.update(update_data)
+                final_portfolio_state = PortfolioState(**merged_data)
+            else:
+                final_portfolio_state = update_data
+
+        # Provide sensible defaults for required fields if not in kwargs
+        if "historical_prices" not in kwargs:
+            kwargs["historical_prices"] = [100.0, 101.0, 102.0]
+        if "current_price" not in kwargs:
+            kwargs["current_price"] = 103.0
+        if "day" not in kwargs:
+            kwargs["day"] = 1
 
         payload = AlphaBotTaskPayload(portfolio_state=final_portfolio_state, **kwargs)
         return payload
