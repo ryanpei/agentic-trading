@@ -57,6 +57,7 @@ async def test_call_alphabot_a2a_success():
     from a2a.types import (
         DataPart,
     )
+    from common.models import TradeOutcome, TradeStatus
 
     mock_client = AsyncMock()
     mock_logger = MagicMock()
@@ -69,17 +70,17 @@ async def test_call_alphabot_a2a_success():
         ticker="TEST",
     )
     expected_reason = "Test approved reason."
-    mock_message_data = {
-        "approved": True,
-        "trade_proposal": expected_trade_proposal.model_dump(),
-        "reason": expected_reason,
-    }
+    trade_outcome = TradeOutcome(
+        status=TradeStatus.APPROVED,
+        reason=expected_reason,
+        trade_proposal=expected_trade_proposal,
+    )
     mock_message = Message(
         message_id="mock_msg_id",
         context_id="mock_context_id",
         task_id="mock_task_id",
         role=Role.agent,
-        parts=[Part(root=DataPart(data=mock_message_data))],
+        parts=[Part(root=DataPart(data=trade_outcome.model_dump(mode="json")))],
     )
     mock_send_message_success_response = SendMessageSuccessResponse(result=mock_message)
     mock_client.send_message.return_value = SendMessageResponse(

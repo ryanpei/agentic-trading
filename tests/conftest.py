@@ -84,6 +84,20 @@ def adk_mock_alphabot_generator():
     """
 
     async def _generator(final_state_delta, final_reason):
+        # Ensure the trade_proposal in the delta is a complete object
+        if "approved_trade" in final_state_delta:
+            trade = final_state_delta["approved_trade"]
+            if "ticker" not in trade:
+                trade["ticker"] = "TEST"
+            if "price" not in trade:
+                trade["price"] = 100.0
+        if "rejected_trade_proposal" in final_state_delta:
+            trade = final_state_delta["rejected_trade_proposal"]
+            if "ticker" not in trade:
+                trade["ticker"] = "TEST"
+            if "price" not in trade:
+                trade["price"] = 100.0
+
         # Yield an event with the state delta
         yield Event(
             author="test_author", actions=EventActions(state_delta=final_state_delta)

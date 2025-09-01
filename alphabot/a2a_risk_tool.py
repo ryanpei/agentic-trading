@@ -1,7 +1,6 @@
 import logging
 import os
-import uuid
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, Dict
 
 import httpx
 from a2a.client import A2AClient, A2AClientHTTPError, A2AClientJSONError
@@ -9,9 +8,7 @@ from a2a.types import (
     DataPart,
     JSONRPCErrorResponse,
     Message,
-    MessageSendParams,
     Role,
-    SendMessageRequest,
     SendMessageResponse,
     SendMessageSuccessResponse,
 )
@@ -20,8 +17,13 @@ from common.config import (
     DEFAULT_RISKGUARD_MAX_POS_SIZE,
     DEFAULT_RISKGUARD_URL,
 )
-from common.models import TradeProposal, PortfolioState, RiskCheckPayload
-from common.utils.agent_utils import create_a2a_message_from_payload
+from common.models import (
+    PortfolioState,
+    RiskCheckPayload,
+    RiskCheckResult,
+    TradeProposal,
+)
+from common.utils.agent_utils import create_a2a_request_from_payload
 from google.adk.events import Event
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types as genai_types  # ADK uses google.genai.types
@@ -134,7 +136,7 @@ class A2ARiskCheckTool(BaseTool):
             ),
         )
 
-    async def run_async(self, **kwargs: Any) -> AsyncGenerator[Event, None]:
+    async def run_async(self, **kwargs: Any) -> Event:
         """Makes the actual A2A HTTP call."""
         tool_context: ToolContext = kwargs["tool_context"]
         args: Dict[str, Any] = kwargs["args"]
@@ -173,7 +175,7 @@ class A2ARiskCheckTool(BaseTool):
                 f"[{self.name} Tool ({invocation_id_short})] Error - Missing trade_proposal or portfolio_state in args."
             )
             final_result_dict["reason"] = "Tool Error: Missing input arguments."
-            yield Event(
+            return Event(
                 author=self.name,
                 content=genai_types.Content(
                     parts=[
@@ -186,7 +188,6 @@ class A2ARiskCheckTool(BaseTool):
                 ),
                 turn_complete=True,
             )
-            return
 
         logger.info(
             f"[{self.name} Tool ({invocation_id_short})] Preparing A2A call to {risk_guard_target_url}"
@@ -204,15 +205,8 @@ class A2ARiskCheckTool(BaseTool):
             max_concentration=max_concentration,
         )
 
-        # 2. Use the new helper to create the A2A Message
-        a2a_message = create_a2a_message_from_payload(
-            payload=risk_payload,
-            role=Role.user,
-            context_id=tool_context._invocation_context.session.id,
-        )
-
-        send_params = MessageSendParams(message=a2a_message)
-        a2a_request = SendMessageRequest(id=str(uuid.uuid4()), params=send_params)
+        # 2. Use the new helper to create the A2A Request
+        a2a_request = create_a2a_request_from_payload(risk_payload, role=Role.user)
 
         a2a_sdk_client = A2AClient(
             httpx_client=self._httpx_client, url=risk_guard_target_url
@@ -235,20 +229,21 @@ class A2ARiskCheckTool(BaseTool):
                     f"A2A Error {actual_error.code}: {actual_error.message}"
                 )
             elif isinstance(root_response_part, SendMessageSuccessResponse):
-                response_result = root_response_part.result
-                if isinstance(response_result, Message):
-                    if response_result.parts and isinstance(
-                        response_result.parts[0].root, DataPart
-                    ):
-                        final_result_dict = response_result.parts[0].root.data
-                    else:
-                        final_result_dict["reason"] = (
-                            "RiskGuard returned an invalid message format."
-                        )
+                response_message = root_response_part.result
+                if (
+                    isinstance(response_message, Message)
+                    and response_message.parts
+                    and isinstance(response_message.parts[0].root, DataPart)
+                ):
+                    part_data = response_message.parts[0].root.data
+                    risk_result_model = RiskCheckResult.model_validate(part_data)
+                    final_result_dict = risk_result_model.model_dump()
                 else:
-                    raise TypeError(
-                        f"Expected a Message from RiskGuard, but got {type(response_result)}"
-                    )
+                    # Handle error or unexpected response
+                    final_result_dict = {
+                        "approved": False,
+                        "reason": "Malformed response from RiskGuard",
+                    }
             else:
                 logger.error(
                     f"[{self.name} Tool ({invocation_id_short})] Unexpected A2A response structure. Root type: {type(root_response_part)}."
@@ -287,7 +282,7 @@ class A2ARiskCheckTool(BaseTool):
         logger.info(
             f"[{self.name} Tool ({invocation_id_short})] Yielding final result: {final_result_dict}"
         )
-        yield Event(
+        return Event(
             author=self.name,
             content=genai_types.Content(
                 parts=[

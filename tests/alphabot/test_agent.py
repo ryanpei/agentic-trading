@@ -8,8 +8,9 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types as genai_types
 
-from alphabot.agent import A2ARiskCheckTool, AlphaBotAgent, PortfolioStateInput
+from alphabot.agent import A2ARiskCheckTool, AlphaBotAgent
 from common.config import DEFAULT_TICKER
+from common.models import PortfolioState
 
 
 def test_alphabot_agent_instantiation():
@@ -80,27 +81,23 @@ async def test_alphabot_run_async_impl_buy_approved(
 
     # Mock the A2ARiskCheckTool's run_async method to return an approved response
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": True,
-                                    "reason": "Trade adheres to risk rules.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": True,
+                                "reason": "Trade adheres to risk rules.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         input_data = alphabot_input_data_factory(
             historical_prices=historical_prices_buy_signal,
@@ -144,27 +141,23 @@ async def test_alphabot_run_async_impl_sell_approved(
 
     # Mock the A2ARiskCheckTool's run_async method to return an approved response
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": True,
-                                    "reason": "Trade adheres to risk rules.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": True,
+                                "reason": "Trade adheres to risk rules.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         input_data = alphabot_input_data_factory(
             historical_prices=historical_prices_sell_signal,
@@ -220,14 +213,14 @@ async def test_generate_signal_no_signal_sma_none(agent: AlphaBotAgent):
 
 def test_determine_trade_proposal_no_buy_when_long(agent: AlphaBotAgent):
     """Tests that _determine_trade_proposal returns None for a BUY signal when already long."""
-    portfolio_state = PortfolioStateInput(cash=10000, shares=10, total_value=11000)
+    portfolio_state = PortfolioState(cash=10000, shares=10, total_value=11000)
     proposal = agent._determine_trade_proposal(
         signal="BUY",
-        should_be_long=True,  # <--- FIX
+        should_be_long=True,
         portfolio_state=portfolio_state,
         current_price=100.0,
         trade_quantity=10,
-        last_rejected_trade=None,  # <--- FIX
+        last_rejected_trade=None,
     )
     assert proposal is None
 
@@ -243,27 +236,23 @@ async def test_alphabot_run_async_impl_sell_approved_e2e(
     adk_ctx.session.state = {"should_be_long": True}
 
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": True,
-                                    "reason": "Trade adheres to risk rules.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": True,
+                                "reason": "Trade adheres to risk rules.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         input_data = alphabot_input_data_factory(
             historical_prices=historical_prices_sell_signal,
@@ -320,27 +309,23 @@ async def test_alphabot_run_async_impl_buy_rejected(
     adk_ctx.session.state = {"should_be_long": False}
 
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": False,
-                                    "reason": "Exceeds max position size.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": False,
+                                "reason": "Exceeds max position size.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         input_data = alphabot_input_data_factory(
             historical_prices=historical_prices_buy_signal,
@@ -366,28 +351,28 @@ async def test_alphabot_run_async_impl_buy_rejected(
 
 def test_determine_trade_proposal_no_sell_when_not_long(agent: AlphaBotAgent):
     """Tests that _determine_trade_proposal returns None for a SELL signal when not long."""
-    portfolio_state = PortfolioStateInput(cash=10000, shares=0, total_value=10000)
+    portfolio_state = PortfolioState(cash=10000, shares=0, total_value=10000)
     proposal = agent._determine_trade_proposal(
         signal="SELL",
-        should_be_long=False,  # <--- FIX
+        should_be_long=False,
         portfolio_state=portfolio_state,
         current_price=100.0,
         trade_quantity=10,
-        last_rejected_trade=None,  # <--- FIX
+        last_rejected_trade=None,
     )
     assert proposal is None
 
 
 def test_determine_trade_proposal_no_sell_when_long_no_shares(agent: AlphaBotAgent):
     """Tests that _determine_trade_proposal returns None for a SELL signal when long but with no shares."""
-    portfolio_state = PortfolioStateInput(cash=10000, shares=0, total_value=10000)
+    portfolio_state = PortfolioState(cash=10000, shares=0, total_value=10000)
     proposal = agent._determine_trade_proposal(
         signal="SELL",
-        should_be_long=True,  # <--- FIX
+        should_be_long=True,
         portfolio_state=portfolio_state,
         current_price=100.0,
         trade_quantity=10,
-        last_rejected_trade=None,  # <--- FIX
+        last_rejected_trade=None,
     )
     assert proposal is None
 
@@ -404,27 +389,23 @@ async def test_alphabot_run_async_impl_state_correction_sell_no_shares(
 
     # Mock the A2ARiskCheckTool's run_async method (not called in this path, but good practice)
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": True,
-                                    "reason": "Trade adheres to risk rules.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": True,
+                                "reason": "Trade adheres to risk rules.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         input_data = alphabot_input_data_factory(
             historical_prices=historical_prices_sell_signal,
@@ -465,27 +446,23 @@ async def test_alphabot_concurrency(
 
     # Mock the A2ARiskCheckTool's run_async method to return an approved response
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": True,
-                                    "reason": "Trade adheres to risk rules.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": True,
+                                "reason": "Trade adheres to risk rules.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         input_data = alphabot_input_data_factory(
             historical_prices=historical_prices_buy_signal,
@@ -536,27 +513,23 @@ async def test_alphabot_does_not_repropose_rejected_trade(
 
     # 2. Mock RiskGuard to always REJECT trades
     with patch.object(A2ARiskCheckTool, "run_async") as mock_run_async:
-
-        async def mock_tool_response_generator(*args, **kwargs):
-            yield Event(
-                author="a2a_risk_check",
-                content=genai_types.Content(
-                    parts=[
-                        genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name="risk_check_result",
-                                response={
-                                    "approved": False,
-                                    "reason": "Insufficient cash for BUY.",
-                                },
-                            )
+        mock_run_async.return_value = Event(
+            author="a2a_risk_check",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name="risk_check_result",
+                            response={
+                                "approved": False,
+                                "reason": "Insufficient cash for BUY.",
+                            },
                         )
-                    ]
-                ),
-                turn_complete=True,
-            )
-
-        mock_run_async.side_effect = mock_tool_response_generator
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
         # 3. Market data that generates a BUY signal
         input_data = alphabot_input_data_factory(
@@ -607,14 +580,80 @@ def test_determine_trade_proposal_rejects_sell_if_quantity_exceeds_shares(
     Tests that _determine_trade_proposal for a SELL signal returns None if the
     configured trade_quantity exceeds the number of shares held.
     """
-    portfolio_state = PortfolioStateInput(cash=10000, shares=5, total_value=10500)
+    portfolio_state = PortfolioState(cash=10000, shares=5, total_value=10500)
     trade_quantity = 10  # Attempting to sell more than owned
     proposal = agent._determine_trade_proposal(
         signal="SELL",
-        should_be_long=True,  # <--- FIX
+        should_be_long=True,
         portfolio_state=portfolio_state,
         current_price=100.0,
         trade_quantity=trade_quantity,
-        last_rejected_trade=None,  # <--- FIX
+        last_rejected_trade=None,
     )
     assert proposal is None
+
+
+@pytest.mark.asyncio
+async def test_alphabot_run_async_impl_insufficient_data(
+    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+):
+    """Tests that the agent handles insufficient historical data gracefully."""
+    adk_ctx.session.state = {"should_be_long": False}
+
+    input_data = alphabot_input_data_factory(
+        historical_prices=[100, 101, 102],  # Not enough data for long_sma_period=10
+        current_price=105.5,
+        short_sma_period=5,
+        long_sma_period=10,
+        day=1,
+    )
+    adk_ctx.user_content = genai_types.Content(
+        parts=[genai_types.Part(text=input_data.model_dump_json())]
+    )
+
+    events = []
+    async for event in agent._run_async_impl(adk_ctx):
+        events.append(event)
+
+    assert len(events) == 1
+    final_event = events[0]
+    assert final_event.author == agent.name
+    assert "No signal yet (calculating SMAs)." in final_event.content.parts[0].text
+    assert not final_event.actions.state_delta
+
+
+@pytest.mark.asyncio
+async def test_alphabot_run_async_impl_buy_signal_corrects_state(
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_buy_signal,
+):
+    """
+    Tests that if a BUY signal is generated but the agent is already long,
+    it produces a NO_ACTION outcome.
+    """
+    adk_ctx.session.state = {"should_be_long": True}  # Agent is already long
+
+    input_data = alphabot_input_data_factory(
+        historical_prices=historical_prices_buy_signal,
+        current_price=129.0,
+        day=35,
+        portfolio_state={"cash": 10000, "shares": 10, "total_value": 11290},
+    )
+    adk_ctx.user_content = genai_types.Content(
+        parts=[genai_types.Part(text=input_data.model_dump_json())]
+    )
+
+    events = []
+    async for event in agent._run_async_impl(adk_ctx):
+        events.append(event)
+
+    assert len(events) == 1
+    final_event = events[0]
+    assert final_event.author == agent.name
+    assert (
+        "Signal generated, but no trade action needed based on current state or recent rejections."
+        in final_event.content.parts[0].text
+    )
+    assert not final_event.actions.state_delta

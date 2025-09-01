@@ -3,14 +3,9 @@ import uuid
 from typing import AsyncGenerator, List, Optional
 
 from common.config import (
-    DEFAULT_ALPHABOT_LONG_SMA,
-    DEFAULT_ALPHABOT_SHORT_SMA,
-    DEFAULT_ALPHABOT_TRADE_QTY,
-    DEFAULT_RISKGUARD_MAX_CONCENTRATION,
-    DEFAULT_RISKGUARD_MAX_POS_SIZE,
-    DEFAULT_RISKGUARD_URL,
     DEFAULT_TICKER,
 )
+from common.models import AlphaBotTaskPayload, PortfolioState
 from common.utils.agent_utils import parse_and_validate_input
 from common.utils.indicators import calculate_sma
 
@@ -19,30 +14,10 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types as genai_types
-from pydantic import BaseModel, Field
 
 from .a2a_risk_tool import A2ARiskCheckTool
 
 logger = logging.getLogger(__name__)
-
-
-class PortfolioStateInput(BaseModel):
-    cash: float
-    shares: int
-    total_value: float
-
-
-class AlphaBotInput(BaseModel):
-    historical_prices: List[float]
-    current_price: float
-    portfolio_state: PortfolioStateInput
-    short_sma_period: int = Field(default=DEFAULT_ALPHABOT_SHORT_SMA)
-    long_sma_period: int = Field(default=DEFAULT_ALPHABOT_LONG_SMA)
-    trade_quantity: int = Field(default=DEFAULT_ALPHABOT_TRADE_QTY)
-    riskguard_url: str = Field(default=DEFAULT_RISKGUARD_URL)
-    max_pos_size: float = Field(default=DEFAULT_RISKGUARD_MAX_POS_SIZE)
-    max_concentration: float = Field(default=DEFAULT_RISKGUARD_MAX_CONCENTRATION)
-    day: int
 
 
 class AlphaBotAgent(BaseAgent):
@@ -157,7 +132,7 @@ class AlphaBotAgent(BaseAgent):
         self,
         signal: Optional[str],
         should_be_long: bool,
-        portfolio_state: PortfolioStateInput,
+        portfolio_state: PortfolioState,
         current_price: float,
         trade_quantity: int,
         last_rejected_trade: Optional[dict],
@@ -203,7 +178,7 @@ class AlphaBotAgent(BaseAgent):
     async def _perform_risk_check(
         self,
         trade_proposal: dict,
-        portfolio_state: PortfolioStateInput,
+        portfolio_state: PortfolioState,
         risk_params: dict,
         ctx: InvocationContext,
     ) -> dict | None:
@@ -245,38 +220,36 @@ class AlphaBotAgent(BaseAgent):
             f"[{self.name} ({invocation_id_short})] Created ToolContext for A2A tool call: {adk_tool_context.function_call_id}"
         )
 
-        tool_event_generator = a2a_risk_tool_instance.run_async(
+        tool_event = await a2a_risk_tool_instance.run_async(
             args=tool_args, tool_context=adk_tool_context
         )
 
         risk_result = None
-        async for tool_event in tool_event_generator:
-            logger.debug(
-                f"[{self.name} ({invocation_id_short})] Received event from A2A tool: {tool_event.author}"
-            )
-            if tool_event.author == a2a_risk_tool_instance.name:
-                if hasattr(tool_event, "get_function_responses") and callable(
-                    getattr(tool_event, "get_function_responses")
-                ):
-                    response_parts = tool_event.get_function_responses()
-                    if response_parts:
-                        risk_result = response_parts[0].response
-                        logger.info(
-                            f"[{self.name} ({invocation_id_short})] Extracted risk result: {risk_result}"
-                        )
-                        break
-                    else:
-                        logger.warning(
-                            f"[{self.name} ({invocation_id_short})] Warning - Event from {tool_event.author} did not contain FunctionResponse parts."
-                        )
+        logger.debug(
+            f"[{self.name} ({invocation_id_short})] Received event from A2A tool: {tool_event.author}"
+        )
+        if tool_event.author == a2a_risk_tool_instance.name:
+            if hasattr(tool_event, "get_function_responses") and callable(
+                getattr(tool_event, "get_function_responses")
+            ):
+                response_parts = tool_event.get_function_responses()
+                if response_parts:
+                    risk_result = response_parts[0].response
+                    logger.info(
+                        f"[{self.name} ({invocation_id_short})] Extracted risk result: {risk_result}"
+                    )
                 else:
                     logger.warning(
-                        f"[{self.name} ({invocation_id_short})] Warning - Event from {tool_event.author} does not have 'get_function_responses' or it's not callable."
+                        f"[{self.name} ({invocation_id_short})] Warning - Event from {tool_event.author} did not contain FunctionResponse parts."
                     )
             else:
-                logger.debug(
-                    f"[{self.name} ({invocation_id_short})] Received intermediate/other event from author: {tool_event.author}"
+                logger.warning(
+                    f"[{self.name} ({invocation_id_short})] Warning - Event from {tool_event.author} does not have 'get_function_responses' or it's not callable."
                 )
+        else:
+            logger.debug(
+                f"[{self.name} ({invocation_id_short})] Received intermediate/other event from author: {tool_event.author}"
+            )
 
         if risk_result is None:
             logger.error(
@@ -356,7 +329,7 @@ class AlphaBotAgent(BaseAgent):
             f"[{self.name} ({invocation_id_short})] Initial 'should_be_long' from session state: {current_should_be_long}"
         )
 
-        validated_input = parse_and_validate_input(ctx, AlphaBotInput, self.name)
+        validated_input = parse_and_validate_input(ctx, AlphaBotTaskPayload, self.name)
         if validated_input is None:
             logger.warning(
                 f"[{self.name} ({invocation_id_short})] Invalid input data (Pydantic). Yielding error event."

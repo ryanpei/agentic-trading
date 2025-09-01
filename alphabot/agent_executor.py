@@ -1,23 +1,15 @@
-import json
 import logging
-from typing import Any
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import DataPart, Part
-from a2a.utils.message import new_agent_parts_message  # New import
-from common.config import (
-    DEFAULT_ALPHABOT_LONG_SMA,
-    DEFAULT_ALPHABOT_SHORT_SMA,
-    DEFAULT_ALPHABOT_TRADE_QTY,
-    DEFAULT_RISKGUARD_MAX_CONCENTRATION,
-    DEFAULT_RISKGUARD_MAX_POS_SIZE,
-    DEFAULT_RISKGUARD_URL,
-)
+from a2a.utils.message import new_agent_parts_message
+from common.models import AlphaBotTaskPayload, TradeOutcome, TradeStatus
 from google.adk import Runner
 from google.adk.memory import InMemoryMemoryService
 from google.adk.sessions import InMemorySessionService, Session
 from google.genai import types as genai_types
+from pydantic import ValidationError
 
 from alphabot.agent import root_agent as alphabot_adk_agent
 
@@ -39,242 +31,113 @@ class AlphaBotAgentExecutor(AgentExecutor):
 
     async def execute(self, context: RequestContext, event_queue: EventQueue):
         """
-        Receives market data and portfolio state, runs it through the ADK agent,
-        and immediately returns the result in a single Message event.
+        Receives a unified task payload, runs it through the ADK agent,
+        and returns the structured result in a standard Artifact.
         """
+        outcome = TradeOutcome(
+            status=TradeStatus.ERROR, reason="Initialization failed."
+        )
         try:
+            # 1. Simplified Payload Parsing
             if not context.context_id:
-                logger.error("Context ID is missing, cannot execute.")
-                return
+                raise ValueError("Context ID is missing, cannot execute.")
 
-            # Extract data from context.message
-            market_data: dict[str, Any] | None = None
-            portfolio_state: dict[str, Any] | None = None
+            if not context.message or not context.message.parts:
+                raise ValueError("Received an empty or invalid message.")
 
-            if context.message and context.message.parts:
-                for part_union in context.message.parts:
-                    part = part_union.root  # Access the actual Part model
-                    if isinstance(part, DataPart):
-                        # Check for indicative keys to identify market_data
-                        if (
-                            "current_price" in part.data
-                            and "historical_prices" in part.data
-                        ):
-                            market_data = part.data
-                        # Check for indicative keys to identify portfolio_state
-                        elif "cash" in part.data and "shares" in part.data:
-                            portfolio_state = part.data
+            part = context.message.parts[0].root
+            if not isinstance(part, DataPart):
+                raise ValueError("Expected a DataPart with AlphaBotTaskPayload")
 
-            if market_data is None or portfolio_state is None:
-                logger.error(
-                    f"Missing market_data or portfolio_state. Extracted market_data: {market_data}, Extracted portfolio_state: {portfolio_state}. Input message parts: {context.message.parts if context.message else 'No message'}"
-                )
-                error_message = new_agent_parts_message(
-                    parts=[
-                        Part(
-                            root=DataPart(
-                                data={
-                                    "error": "Invalid input: Missing market_data or portfolio_state"
-                                }
-                            )
-                        )
-                    ],
-                    context_id=context.context_id,
-                    task_id=context.task_id,
-                )
-                await event_queue.enqueue_event(error_message)
-                return
-
-            # Ensure agent_params is initialized even if context.message.metadata is None
-            agent_params = (context.message.metadata or {}) if context.message else {}
-            short_sma = agent_params.get("short_sma", DEFAULT_ALPHABOT_SHORT_SMA)
-            long_sma = agent_params.get("long_sma", DEFAULT_ALPHABOT_LONG_SMA)
-            trade_qty = agent_params.get("trade_qty", DEFAULT_ALPHABOT_TRADE_QTY)
-            riskguard_url = agent_params.get("riskguard_url", DEFAULT_RISKGUARD_URL)
-            max_pos_size = agent_params.get(
-                "max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE
-            )
-            max_concentration = agent_params.get(
-                "max_concentration", DEFAULT_RISKGUARD_MAX_CONCENTRATION
-            )
-
-            # Prepare input for ADK Agent
-            agent_input_dict = {
-                "historical_prices": market_data.get("historical_prices", []),
-                "current_price": market_data.get("current_price"),
-                "day": market_data.get("day"),
-                "portfolio_state": portfolio_state,
-                "short_sma_period": short_sma,
-                "long_sma_period": long_sma,
-                "trade_quantity": trade_qty,
-                "riskguard_url": riskguard_url,
-                "max_pos_size": max_pos_size,
-                "max_concentration": max_concentration,
-            }
-            agent_input_dict = {
-                k: v for k, v in agent_input_dict.items() if v is not None
-            }
-            agent_input_json = json.dumps(agent_input_dict)
+            validated_payload = AlphaBotTaskPayload.model_validate(part.data)
+            agent_input_json = validated_payload.model_dump_json()
             adk_content = genai_types.Content(
                 parts=[genai_types.Part(text=agent_input_json)]
             )
 
             # Ensure ADK Session Exists
             session_id_for_adk = context.context_id
-            logger.info(
-                f"Task {context.task_id}: Attempting to get/create ADK session for session_id: '{session_id_for_adk}' (type: {type(session_id_for_adk)})"
+            session: (
+                Session | None
+            ) = await self._adk_runner.session_service.get_session(
+                app_name=self._adk_runner.app_name,
+                user_id="a2a_user",
+                session_id=session_id_for_adk,
             )
-
-            session: Session | None = None
-            if (
-                session_id_for_adk
-            ):  # Only proceed if session_id_for_adk is not None or empty
-                try:
-                    session = await self._adk_runner.session_service.get_session(  # Added await
-                        app_name=self._adk_runner.app_name,
-                        user_id="a2a_user",
-                        session_id=session_id_for_adk,
-                    )
-                except Exception as e_get:
-                    logger.exception(
-                        f"Task {context.task_id}: Exception during ADK session get_session for session_id '{session_id_for_adk}': {e_get}"
-                    )
-                    session = None  # Ensure session is None if get_session failed
-
-                if not session:
-                    logger.info(
-                        f"Task {context.task_id}: ADK Session not found or failed to get for '{session_id_for_adk}'. Creating new session."
-                    )
-                    try:
-                        session = await self._adk_runner.session_service.create_session(  # Added await
-                            app_name=self._adk_runner.app_name,
-                            user_id="a2a_user",
-                            session_id=session_id_for_adk,
-                            state={},
-                        )
-                        if session:  # session should be the Session object here
-                            # Assuming the ADK Session object uses 'id' for its identifier
-                            logger.info(
-                                f"Task {context.task_id}: Successfully created ADK session '{session.id if hasattr(session, 'id') else 'ID_NOT_FOUND'}'."
-                            )
-                        else:
-                            # This case might happen if create_session, despite being awaited, could return None (though unlikely for InMemory)
-                            logger.error(
-                                f"Task {context.task_id}: ADK InMemorySessionService.create_session returned None for session_id '{session_id_for_adk}'."
-                            )
-                    except Exception as e_create:
-                        logger.exception(
-                            f"Task {context.task_id}: Exception during ADK session create_session for session_id '{session_id_for_adk}': {e_create}"
-                        )
-                        session = None  # Ensure session is None if creation failed
-                else:  # session was successfully retrieved by get_session
-                    # Assuming the ADK Session object uses 'id' for its identifier
-                    logger.info(
-                        f"Task {context.task_id}: Found existing ADK session '{session.id if hasattr(session, 'id') else 'ID_NOT_FOUND'}'."
-                    )
-            else:
-                logger.error(
-                    f"Task {context.task_id}: ADK session_id (context.context_id) is None or empty. Cannot initialize ADK session."
-                )
-
-            if not session:  # If session is still None after trying to get/create, or if session_id_for_adk was initially invalid
-                error_message_text = f"Failed to establish ADK session. session_id was '{session_id_for_adk}'."
-                logger.error(
-                    f"Task {context.task_id}: {error_message_text} Cannot proceed with ADK run."
-                )
-                error_message = new_agent_parts_message(
-                    parts=[
-                        Part(
-                            root=DataPart(
-                                data={"error": f"Internal error: {error_message_text}"}
-                            )
-                        )
-                    ],
-                    context_id=context.context_id,
-                    task_id=context.task_id,
-                )
-                await event_queue.enqueue_event(error_message)
-                return
-
-            final_result_dict: dict[str, Any] = {}
-            final_reason_text = "Reason not provided."
-            captured_state_delta = None
-
-            try:
-                # Assuming the ADK Session object uses 'id' for its identifier for logging confirmation
-                logger.info(
-                    f"Task {context.task_id}: Calling ADK run_async with session_id_for_adk: '{session_id_for_adk}'. ADK session object is {'present and has id' if session and hasattr(session, 'id') and session.id else 'None, or missing id attribute, or id is None/empty'}."
-                )
-                async for event in self._adk_runner.run_async(
+            if not session:
+                session = await self._adk_runner.session_service.create_session(
+                    app_name=self._adk_runner.app_name,
                     user_id="a2a_user",
                     session_id=session_id_for_adk,
-                    new_message=adk_content,  # Use session_id_for_adk which was validated
-                ):
-                    if event.actions and event.actions.state_delta:
-                        captured_state_delta = event.actions.state_delta
-                    if event.is_final_response():
-                        if event.content and event.content.parts:
-                            text_part = next(
-                                (
-                                    p
-                                    for p in event.content.parts
-                                    if hasattr(p, "text") and p.text
-                                ),
-                                None,
-                            )
-                            if text_part:
-                                final_reason_text = text_part.text
-
-                if captured_state_delta:
-                    if "approved_trade" in captured_state_delta:
-                        final_result_dict = {
-                            "approved": True,
-                            "trade_proposal": captured_state_delta["approved_trade"],
-                            "reason": final_reason_text,
-                        }
-                    elif "rejected_trade_proposal" in captured_state_delta:
-                        final_result_dict = {
-                            "approved": False,
-                            "trade_proposal": captured_state_delta[
-                                "rejected_trade_proposal"
-                            ],
-                            "reason": final_reason_text,
-                        }
-                    else:  # No trade decision in state_delta, use reason text as generic message
-                        final_result_dict = {
-                            "status": "Info",
-                            "message": final_reason_text,
-                        }
-                elif (
-                    final_reason_text != "Reason not provided."
-                ):  # Use reason text if no state_delta but reason exists
-                    final_result_dict = {"status": "Info", "message": final_reason_text}
-                else:  # Fallback if nothing conclusive
-                    final_result_dict = {
-                        "status": "Unknown",
-                        "message": "Agent finished, unknown result format.",
-                    }
-
-                final_message = new_agent_parts_message(
-                    parts=[Part(root=DataPart(data=final_result_dict))],
-                    context_id=context.context_id,
-                    task_id=context.task_id,
+                    state={},
                 )
-                await event_queue.enqueue_event(final_message)
+            if not session:
+                raise RuntimeError("Failed to create or retrieve ADK session.")
 
-            except Exception as e:
-                logger.exception(
-                    f"Task {context.task_id}: Error running AlphaBot ADK agent: {e}"
-                )
-                error_message = new_agent_parts_message(
-                    parts=[
-                        Part(root=DataPart(data={"error": f"ADK Agent error: {e}"}))
-                    ],
-                    context_id=context.context_id,
-                    task_id=context.task_id,
-                )
-                await event_queue.enqueue_event(error_message)
-                return
+            # 2. Process ADK Output and Wrap in a `TradeOutcome` and `Artifact`
+            final_reason_text = "Reason not provided."
+            captured_state_delta = {}
+            async for event in self._adk_runner.run_async(
+                user_id="a2a_user",
+                session_id=session_id_for_adk,
+                new_message=adk_content,
+            ):
+                if event.actions and event.actions.state_delta:
+                    captured_state_delta.update(event.actions.state_delta)
+                if event.is_final_response() and event.content and event.content.parts:
+                    text_part = next(
+                        (p for p in event.content.parts if hasattr(p, "text")), None
+                    )
+                    if text_part:
+                        final_reason_text = text_part.text
+
+            if "approved_trade" in captured_state_delta:
+                trade_decision = {
+                    "status": TradeStatus.APPROVED,
+                    "reason": final_reason_text,
+                    "trade_proposal": captured_state_delta.get("approved_trade"),
+                }
+            elif "rejected_trade_proposal" in captured_state_delta:
+                trade_decision = {
+                    "status": TradeStatus.REJECTED,
+                    "reason": final_reason_text,
+                    "trade_proposal": captured_state_delta.get(
+                        "rejected_trade_proposal"
+                    ),
+                }
+            else:
+                trade_decision = {
+                    "status": TradeStatus.NO_ACTION,
+                    "reason": final_reason_text,
+                }
+            outcome = TradeOutcome.model_validate(trade_decision)
+            final_message = new_agent_parts_message(
+                parts=[Part(root=DataPart(data=outcome.model_dump()))],
+                context_id=context.context_id,
+                task_id=context.task_id,
+            )
+            await event_queue.enqueue_event(final_message)
+
+        except (ValidationError, ValueError, RuntimeError, AttributeError) as e:
+            logger.error(f"Error during agent execution: {e}", exc_info=True)
+            outcome = TradeOutcome(status=TradeStatus.ERROR, reason=str(e))
+            final_message = new_agent_parts_message(
+                parts=[Part(root=DataPart(data=outcome.model_dump()))],
+                context_id=context.context_id,
+                task_id=context.task_id,
+            )
+            await event_queue.enqueue_event(final_message)
+        except Exception as e:
+            logger.exception(f"An unexpected error occurred: {e}")
+            outcome = TradeOutcome(
+                status=TradeStatus.ERROR, reason="An unexpected server error occurred."
+            )
+            final_message = new_agent_parts_message(
+                parts=[Part(root=DataPart(data=outcome.model_dump()))],
+                context_id=context.context_id,
+                task_id=context.task_id,
+            )
+            await event_queue.enqueue_event(final_message)
         finally:
             await event_queue.close()
 

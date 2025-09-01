@@ -1,7 +1,8 @@
 import pytest
-from typing import Callable
 from alphabot.agent import AlphaBotAgent
-from common.models import AlphaBotPayload, PortfolioState
+from common.models import AlphaBotTaskPayload, PortfolioState
+from common.utils.agent_utils import create_a2a_message_from_payload
+from a2a.types import Message, Role
 
 
 @pytest.fixture
@@ -95,30 +96,54 @@ def historical_prices_sell_signal() -> list[float]:
 
 
 @pytest.fixture
-def alphabot_input_data_factory(
-    base_portfolio_state: PortfolioState,
-) -> Callable[..., AlphaBotPayload]:
+def alphabot_input_data_factory(base_portfolio_state: PortfolioState):
     """
-    Provides an enhanced factory for creating AlphaBotPayload instances for AlphaBot tests.
-    Allows overriding nested portfolio_state values.
+    Provides a factory for creating AlphaBotTaskPayload instances.
+    Injects shared base model fixtures from the root conftest.
     """
 
-    def _input_data(**kwargs) -> AlphaBotPayload:
-        portfolio_state_data = base_portfolio_state.model_dump()
+    def _input_data(**kwargs) -> AlphaBotTaskPayload:
+        # Use the same .model_copy() pattern as the refactored riskguard factory
+        final_portfolio_state = base_portfolio_state.model_copy(deep=True)
 
-        # Allow overriding nested portfolio_state keys for convenience
         if "portfolio_state" in kwargs:
-            portfolio_state_data.update(kwargs.pop("portfolio_state"))
+            update_data = kwargs.pop("portfolio_state")
+            if isinstance(update_data, dict):
+                merged_data = base_portfolio_state.model_dump()
+                merged_data.update(update_data)
+                final_portfolio_state = PortfolioState(**merged_data)
+            else:
+                final_portfolio_state = update_data
 
-        # Create the final payload, allowing top-level overrides
-        payload_data = {
-            "historical_prices": [],
-            "current_price": 100.0,
-            "portfolio_state": PortfolioState(**portfolio_state_data),
-            "day": 50,
-            **kwargs,  # Apply any other top-level overrides
-        }
+        # Provide sensible defaults for required fields if not in kwargs
+        if "historical_prices" not in kwargs:
+            kwargs["historical_prices"] = [100.0, 101.0, 102.0]
+        if "current_price" not in kwargs:
+            kwargs["current_price"] = 103.0
+        if "day" not in kwargs:
+            kwargs["day"] = 1
 
-        return AlphaBotPayload(**payload_data)
+        payload = AlphaBotTaskPayload(portfolio_state=final_portfolio_state, **kwargs)
+        return payload
 
     return _input_data
+
+
+@pytest.fixture
+def alphabot_message_factory(alphabot_input_data_factory):
+    """Factory to create a complete A2A Message for AlphaBot tests using the common utility."""
+
+    def _create_message(**kwargs) -> Message:
+        # 1. Create the payload using the other factory
+        input_data = alphabot_input_data_factory(**kwargs)
+
+        # 2. Use the existing utility to create the message
+        # This ensures the test uses the same logic as the application
+        a2a_message = create_a2a_message_from_payload(input_data, role=Role.user)
+
+        # You can still override generated fields if needed for specific tests
+        a2a_message.context_id = kwargs.get("context_id", a2a_message.context_id)
+
+        return a2a_message
+
+    return _create_message
