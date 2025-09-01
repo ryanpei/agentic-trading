@@ -1,9 +1,11 @@
 import json
-from typing import Type, TypeVar
+import uuid
+from typing import Type, TypeVar, Optional
 from pydantic import BaseModel, ValidationError
 import logging
 
 from google.adk.agents.invocation_context import InvocationContext
+from a2a.types import Message, Part, DataPart, Role
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
@@ -28,6 +30,12 @@ def parse_and_validate_input(
         return None
 
     input_text = ctx.user_content.parts[0].text
+    if input_text is None:
+        logger.error(
+            f"[{agent_name} ({invocation_id_short})] ERROR - Input event text is None."
+        )
+        return None
+
     try:
         input_payload = json.loads(input_text)
         validated_input = model(**input_payload)
@@ -45,3 +53,25 @@ def parse_and_validate_input(
             f"[{agent_name} ({invocation_id_short})] ERROR - Input validation failed: {e}. Input was: '{input_text[:200]}...'"
         )
         return None
+
+
+def create_a2a_message_from_payload(
+    payload: BaseModel,
+    role: Role,
+    metadata: Optional[dict] = None,
+    context_id: Optional[str] = None,
+) -> Message:
+    """
+    Creates a standardized a2a.types.Message from a Pydantic model payload.
+    The payload is serialized and placed into a single DataPart.
+    """
+    # model_dump() converts the Pydantic model to a dictionary
+    data_part = DataPart(data=payload.model_dump())
+
+    return Message(
+        message_id=str(uuid.uuid4()),
+        role=role,
+        parts=[Part(root=data_part)],
+        metadata=metadata or {},
+        context_id=context_id,
+    )

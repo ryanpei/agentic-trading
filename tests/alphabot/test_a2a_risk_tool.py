@@ -11,6 +11,7 @@ from a2a.types import (
     DataPart,
     TaskState,
     Part,
+    Message,
 )
 from google.adk.tools import ToolContext
 
@@ -103,6 +104,17 @@ async def test_run_async_approved(
         mock_client_constructor.assert_called_once()
         mock_a2a_client.send_message.assert_awaited_once()
 
+        # Verify the payload sent to the A2AClient
+        sent_request = mock_a2a_client.send_message.call_args[0][0]
+        sent_message: Message = sent_request.params.message
+        sent_part = sent_message.parts[0].root
+        assert isinstance(sent_part, DataPart)
+        sent_payload = sent_part.data
+
+        assert isinstance(sent_payload, dict)
+        assert sent_payload["trade_proposal"] == base_trade_proposal
+        assert sent_payload["portfolio_state"] == base_portfolio_state
+
 
 @pytest.mark.asyncio
 async def test_run_async_rejected(
@@ -141,3 +153,14 @@ async def test_run_async_rejected(
         assert response_data == expected_result
 
         mock_client_constructor.assert_called_once()
+
+        # Verify the payload sent to the A2AClient
+        sent_request = mock_a2a_client.send_message.call_args[0][0]
+        sent_message: Message = sent_request.params.message
+        sent_part = sent_message.parts[0].root
+        assert isinstance(sent_part, DataPart)
+        sent_payload = sent_part.data
+
+        assert isinstance(sent_payload, dict)
+        assert sent_payload["trade_proposal"] == base_trade_proposal
+        assert sent_payload["portfolio_state"] == base_portfolio_state

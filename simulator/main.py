@@ -42,6 +42,7 @@ from a2a.types import (
 from common.config import (
     DEFAULT_SIMULATOR_PORT,
 )  # Keep this for the uvicorn runner at the bottom
+from common.models import PortfolioState as CommonPortfolioState
 from common.utils.indicators import calculate_sma
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
@@ -341,38 +342,42 @@ async def _call_alphabot_a2a(
         A dictionary containing the outcome.
     """
 
-    market_data_part_data = {
-        "market_data": {
-            "day": day,
-            "current_price": current_price,
-            "historical_prices": historical_prices,
-        }
-    }
-    portfolio_state_part_data = {"portfolio_state": portfolio.__dict__}
+    # 1. Create a Pydantic model for the portfolio state for data consistency.
+    portfolio_model = CommonPortfolioState(
+        cash=portfolio.cash,
+        shares=portfolio.shares,
+        total_value=portfolio.total_value,
+    )
 
+    # 2. Construct the A2A message with two separate data parts, as expected by the AlphaBot executor.
+    market_data_part = Part(
+        root=A2ADataPart(
+            data={
+                "historical_prices": historical_prices,
+                "current_price": current_price,
+                "day": day,
+            }
+        )
+    )
+    # The portfolio data should be the top-level object in its part for the executor to parse correctly.
+    portfolio_state_part = Part(root=A2ADataPart(data=portfolio_model.model_dump()))
+
+    # 3. Define the agent parameters to be sent in the message metadata.
     agent_params_metadata = {
         "short_sma": params["alphabot_short_sma"],
         "long_sma": params["alphabot_long_sma"],
         "trade_qty": params["alphabot_trade_qty"],
-        "riskguard_url": params.get(
-            "riskguard_url",
-            os.environ.get("RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL),
-        ),
+        "riskguard_url": params["riskguard_url"],
         "max_pos_size": params["riskguard_max_pos_size"],
         "max_concentration": params["riskguard_max_concentration"] / 100.0,
     }
-    sim_logger.debug(f"  >> Metadata for A2A call: {agent_params_metadata}")
 
-    # Construct a2a.types.Message for the new SDK
     sdk_message = A2AMessage(
-        context_id=session_id,
         message_id=str(uuid.uuid4()),
         role=A2ARole.user,
-        parts=[
-            Part(root=A2ADataPart(data=market_data_part_data["market_data"])),
-            Part(root=A2ADataPart(data=portfolio_state_part_data["portfolio_state"])),
-        ],
+        parts=[market_data_part, portfolio_state_part],
         metadata=agent_params_metadata,
+        context_id=session_id,
     )
     sdk_send_params = MessageSendParams(
         message=sdk_message,

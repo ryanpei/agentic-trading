@@ -1,42 +1,19 @@
 import logging
 from typing import AsyncGenerator
 
+from common.models import RiskCheckPayload
 from common.utils.agent_utils import parse_and_validate_input
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types as genai_types
-from pydantic import BaseModel, Field
 
 from .rules import (
-    DEFAULT_RISKGUARD_MAX_CONCENTRATION,
-    DEFAULT_RISKGUARD_MAX_POS_SIZE,
     RiskCheckResult,
     check_trade_risk_logic,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# --- Pydantic Input Models for RiskGuard ---
-class TradeProposalInput(BaseModel):
-    action: str
-    ticker: str
-    quantity: int
-    price: float
-
-
-class PortfolioStateInput(BaseModel):
-    cash: float
-    shares: int
-    total_value: float
-
-
-class RiskGuardInput(BaseModel):
-    trade_proposal: TradeProposalInput
-    portfolio_state: PortfolioStateInput
-    max_pos_size: float = Field(default=DEFAULT_RISKGUARD_MAX_POS_SIZE)
-    max_concentration: float = Field(default=DEFAULT_RISKGUARD_MAX_CONCENTRATION)
 
 
 class RiskGuardAgent(BaseAgent):
@@ -59,7 +36,7 @@ class RiskGuardAgent(BaseAgent):
             f"[{self.name} ({invocation_id_short})] Received risk check invocation"
         )
 
-        validated_input = parse_and_validate_input(ctx, RiskGuardInput, self.name)
+        validated_input = parse_and_validate_input(ctx, RiskCheckPayload, self.name)
 
         if not validated_input:
             result_dict = {
