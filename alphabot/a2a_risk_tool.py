@@ -212,10 +212,6 @@ class A2ARiskCheckTool(BaseTool):
             parts=[
                 Part(root=TextPart(text=json.dumps(risk_guard_payload))),
             ],
-            metadata={
-                "max_pos_size": max_pos_size,
-                "max_concentration": max_concentration,
-            },
         )
 
         send_params = MessageSendParams(message=a2a_message)
@@ -274,73 +270,24 @@ class A2ARiskCheckTool(BaseTool):
                         for msg in messages_to_check:
                             if msg.parts:
                                 msg_part_root = msg.parts[0].root
-                                if (
-                                    isinstance(msg_part_root, TextPart)
-                                    and msg_part_root.text
-                                ):
-                                    try:
-                                        parsed_data = json.loads(msg_part_root.text)
-                                        if (
-                                            isinstance(parsed_data, dict)
-                                            and "approved" in parsed_data
-                                            and "reason" in parsed_data
-                                        ):
-                                            final_result_dict = parsed_data
-                                            logger.info(
-                                                f"[{self.name} Tool ({invocation_id_short})] Extracted result from Task Message (TextPart JSON): {final_result_dict}"
-                                            )
-                                            result_found = True
-                                            break
-                                    except json.JSONDecodeError:
-                                        logger.warning(
-                                            f"[{self.name} Tool ({invocation_id_short})] Task Message TextPart is not JSON: {msg_part_root.text}"
-                                        )
-                                elif isinstance(msg_part_root, DataPart):
-                                    final_result_dict = msg_part_root.data
-                                    logger.info(
-                                        f"[{self.name} Tool ({invocation_id_short})] Extracted result from Task Message (DataPart): {final_result_dict}"
-                                    )
+                                result = self._extract_result_from_part(
+                                    msg_part_root, invocation_id_short
+                                )
+                                if result:
+                                    final_result_dict = result
                                     result_found = True
                                     break
-                                else:
-                                    logger.warning(
-                                        f"[{self.name} Tool ({invocation_id_short})] Task Message contains unsupported part type: {type(msg_part_root)}"
-                                    )
 
                 elif isinstance(response_result, Message):
                     # If RiskGuard sends a direct message (not wrapped in a Task)
                     if response_result.parts:
                         message_part_root = response_result.parts[0].root
-                        if (
-                            isinstance(message_part_root, TextPart)
-                            and message_part_root.text
-                        ):
-                            try:
-                                parsed_data = json.loads(message_part_root.text)
-                                if (
-                                    isinstance(parsed_data, dict)
-                                    and "approved" in parsed_data
-                                    and "reason" in parsed_data
-                                ):
-                                    final_result_dict = parsed_data
-                                    logger.info(
-                                        f"[{self.name} Tool ({invocation_id_short})] Extracted result from direct Message (TextPart JSON): {final_result_dict}"
-                                    )
-                                    result_found = True
-                            except json.JSONDecodeError:
-                                logger.warning(
-                                    f"[{self.name} Tool ({invocation_id_short})] Direct Message TextPart is not JSON: {message_part_root.text}"
-                                )
-                        elif isinstance(message_part_root, DataPart):
-                            final_result_dict = message_part_root.data
-                            logger.info(
-                                f"[{self.name} Tool ({invocation_id_short})] Extracted result from direct Message (DataPart): {final_result_dict}"
-                            )
+                        result = self._extract_result_from_part(
+                            message_part_root, invocation_id_short
+                        )
+                        if result:
+                            final_result_dict = result
                             result_found = True
-                        else:
-                            logger.warning(
-                                f"[{self.name} Tool ({invocation_id_short})] Direct Message contains unsupported part type: {type(message_part_root)}"
-                            )
 
                 if not result_found:
                     logger.warning(
@@ -402,3 +349,32 @@ class A2ARiskCheckTool(BaseTool):
             ),
             turn_complete=True,  # This tool completes its action in one go
         )
+
+    def _extract_result_from_part(self, part_root, invocation_id_short: str) -> dict | None:
+        """Extract result data from a message part."""
+        if isinstance(part_root, TextPart) and part_root.text:
+            try:
+                parsed_data = json.loads(part_root.text)
+                if (
+                    isinstance(parsed_data, dict)
+                    and "approved" in parsed_data
+                    and "reason" in parsed_data
+                ):
+                    logger.info(
+                        f"[{self.name} Tool ({invocation_id_short})] Extracted result from TextPart JSON: {parsed_data}"
+                    )
+                    return parsed_data
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"[{self.name} Tool ({invocation_id_short})] TextPart is not JSON: {part_root.text}"
+                )
+        elif isinstance(part_root, DataPart):
+            logger.info(
+                f"[{self.name} Tool ({invocation_id_short})] Extracted result from DataPart: {part_root.data}"
+            )
+            return part_root.data
+        else:
+            logger.warning(
+                f"[{self.name} Tool ({invocation_id_short})] Part contains unsupported type: {type(part_root)}"
+            )
+        return None
