@@ -57,24 +57,65 @@ class RiskGuardAgentExecutor(AgentExecutor):
                 parts=[genai_types.Part(text=agent_input_json)]
             )
 
-            # Session management remains the same
-            session: (
-                Session | None
-            ) = await self._adk_runner.session_service.get_session(
-                app_name=self._adk_runner.app_name,
-                user_id="a2a_user",
-                session_id=context.context_id,
+            # Ensure ADK Session Exists
+            session_id_for_adk = context.context_id
+            logger.info(
+                f"Task {context.task_id}: Attempting to get/create ADK session for session_id: '{session_id_for_adk}'"
             )
-            if session is None:
-                session = await self._adk_runner.session_service.create_session(
-                    app_name=self._adk_runner.app_name,
-                    user_id="a2a_user",
-                    session_id=context.context_id,
-                    state={},
+
+            session: Session | None = None
+            if session_id_for_adk:
+                try:
+                    session = await self._adk_runner.session_service.get_session(
+                        app_name=self._adk_runner.app_name,
+                        user_id="a2a_user",
+                        session_id=session_id_for_adk,
+                    )
+                except Exception as e_get:
+                    logger.exception(
+                        f"Task {context.task_id}: Exception during ADK session get_session for session_id '{session_id_for_adk}': {e_get}"
+                    )
+                    session = None
+
+                if not session:
+                    logger.info(
+                        f"Task {context.task_id}: ADK Session not found or failed to get for '{session_id_for_adk}'. Creating new session."
+                    )
+                    try:
+                        session = await self._adk_runner.session_service.create_session(
+                            app_name=self._adk_runner.app_name,
+                            user_id="a2a_user",
+                            session_id=session_id_for_adk,
+                            state={},
+                        )
+                        if session:
+                            logger.info(
+                                f"Task {context.task_id}: Successfully created ADK session '{session.id if hasattr(session, 'id') else 'ID_NOT_FOUND'}'."
+                            )
+                        else:
+                            logger.error(
+                                f"Task {context.task_id}: ADK InMemorySessionService.create_session returned None for session_id '{session_id_for_adk}'."
+                            )
+                    except Exception as e_create:
+                        logger.exception(
+                            f"Task {context.task_id}: Exception during ADK session create_session for session_id '{session_id_for_adk}': {e_create}"
+                        )
+                        session = None
+                else:
+                    logger.info(
+                        f"Task {context.task_id}: Found existing ADK session '{session.id if hasattr(session, 'id') else 'ID_NOT_FOUND'}'."
+                    )
+            else:
+                logger.error(
+                    f"Task {context.task_id}: ADK session_id (context.context_id) is None or empty. Cannot initialize ADK session."
                 )
 
             if not session:
-                raise ConnectionError("Failed to establish ADK session.")
+                error_message_text = f"Failed to establish ADK session. session_id was '{session_id_for_adk}'."
+                logger.error(
+                    f"Task {context.task_id}: {error_message_text} Cannot proceed with ADK run."
+                )
+                raise ConnectionError(error_message_text)
 
             # Core ADK logic execution
             risk_result_dict: dict[str, Any] = {
