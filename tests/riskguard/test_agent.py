@@ -5,7 +5,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.genai import types as genai_types
 
 from riskguard.agent import RiskGuardAgent
-from common.models import RiskCheckPayload
+from common.models import TradeProposal
 
 
 @pytest.fixture
@@ -32,15 +32,15 @@ async def test_riskguard_run_async_impl_concurrent_requests(
     async def run_agent_invocation(check_id):
         ctx = adk_ctx
         input_data = riskguard_input_data_factory(
-            trade_proposal={
-                "quantity": 100,
-                "price": 50.0,
-                "ticker": f"GENERIC_STOCK_{check_id}",
-            },
+            trade_proposal=TradeProposal(
+                action="BUY",
+                quantity=100,
+                price=50.0,
+                ticker=f"GENERIC_STOCK_{check_id}",
+            )
         )
-        payload = RiskCheckPayload.model_validate(input_data)
         ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=payload.model_dump_json())]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
         events = []
         async for event in agent._run_async_impl(ctx):

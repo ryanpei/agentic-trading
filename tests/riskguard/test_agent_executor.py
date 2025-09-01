@@ -2,7 +2,6 @@ from typing import Callable
 
 import pytest
 from a2a.server.agent_execution import RequestContext
-from a2a.server.events import EventQueue
 from a2a.types import DataPart, Message, Part, Role, MessageSendParams
 from riskguard.agent_executor import RiskGuardAgentExecutor
 
@@ -18,16 +17,10 @@ def riskguard_message_factory(
         return Message(
             message_id="test_message_id",
             role=Role.user,
-            parts=[Part(root=DataPart(data=input_data))],
+            parts=[Part(root=DataPart(data=input_data.model_dump()))],
         )
 
     return _create_message
-
-
-@pytest.fixture
-def event_queue():
-    """EventQueue for testing."""
-    return EventQueue()
 
 
 @pytest.mark.asyncio
@@ -76,7 +69,7 @@ async def test_execute_success_approved(
 
 @pytest.mark.asyncio
 async def test_execute_missing_trade_proposal(
-    mock_runner_factory, event_queue, adk_mock_riskguard_generator
+    mock_runner_factory, adk_mock_riskguard_generator, event_queue
 ):
     mock_runner_instance = mock_runner_factory("riskguard.agent_executor")
 
@@ -130,8 +123,8 @@ async def test_execute_missing_trade_proposal(
 async def test_execute_adk_runner_exception(
     riskguard_message_factory,
     mock_runner_factory,
-    event_queue,
     adk_mock_riskguard_generator,
+    event_queue,
 ):
     mock_runner_instance = mock_runner_factory("riskguard.agent_executor")
 
@@ -194,6 +187,7 @@ async def test_execute_handles_adk_runner_exception(
     # Assert
     # 1. An event was enqueued
     enqueued_message = await event_queue.dequeue_event()
+    assert event_queue.is_closed()
 
     # 2. The enqueued event is a Message containing error details
     assert isinstance(enqueued_message, Message)

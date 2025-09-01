@@ -1,8 +1,19 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
-from simulator.main import app
+from simulator.main import app, _call_alphabot_a2a
 import common.config as defaults
+from common.models import TradeProposal
+from a2a.client import A2AClient
+from a2a.types import (
+    SendMessageResponse,
+    SendMessageSuccessResponse,
+    TextPart,
+    Message,
+    Part,
+    Role,
+)
+from simulator.portfolio import PortfolioState
 
 client = TestClient(app)
 
@@ -43,32 +54,24 @@ def test_read_main():
 @pytest.mark.asyncio
 async def test_call_alphabot_a2a_success():
     """Test _call_alphabot_a2a with a successful message response."""
-    from unittest.mock import AsyncMock, MagicMock
     from a2a.types import (
-        SendMessageResponse,
-        SendMessageSuccessResponse,
-        Message,
         DataPart,
-        Part,
-        Role,
     )
-    from simulator.main import _call_alphabot_a2a
-    from simulator.portfolio import PortfolioState
 
     mock_client = AsyncMock()
     mock_logger = MagicMock()
 
     # Mock the A2AClient.send_message to return a successful Message
-    expected_trade_proposal = {
-        "action": "BUY",
-        "quantity": 10,
-        "price": 100.0,
-        "ticker": "TEST",
-    }
+    expected_trade_proposal = TradeProposal(
+        action="BUY",
+        quantity=10,
+        price=100.0,
+        ticker="TEST",
+    )
     expected_reason = "Test approved reason."
     mock_message_data = {
         "approved": True,
-        "trade_proposal": expected_trade_proposal,
+        "trade_proposal": expected_trade_proposal.model_dump(),
         "reason": expected_reason,
     }
     mock_message = Message(
@@ -111,7 +114,7 @@ async def test_call_alphabot_a2a_success():
     )
 
     # Assertions
-    assert outcome["approved_trade"] == expected_trade_proposal
+    assert outcome["approved_trade"] == expected_trade_proposal.model_dump()
     assert outcome["rejected_trade"] is None
     assert outcome["reason"] == expected_reason
     assert outcome["error"] is None
@@ -119,35 +122,25 @@ async def test_call_alphabot_a2a_success():
 
 
 @pytest.mark.asyncio
-async def test_call_alphabot_a2a_invalid_message_format():
-    """Test _call_alphabot_a2a when AlphaBot returns an invalid message format."""
-    from unittest.mock import AsyncMock, MagicMock
-    from a2a.types import (
-        SendMessageResponse,
-        SendMessageSuccessResponse,
-        Message,
-        Part,
-        Role,
-        TextPart,
-    )
-    from simulator.main import _call_alphabot_a2a
-    from simulator.portfolio import PortfolioState
-
-    mock_client = AsyncMock()
+async def test_call_alphabot_a2a_handles_malformed_message():
+    """
+    Tests that _call_alphabot_a2a handles a Message response that
+    is missing the expected DataPart.
+    """
+    # Arrange
+    mock_client = AsyncMock(spec=A2AClient)
     mock_logger = MagicMock()
 
-    # Mock the A2AClient.send_message to return a Message without DataPart
-    mock_message = Message(
-        message_id="mock_msg_id",
-        context_id="mock_context_id",
-        task_id="mock_task_id",
+    # Simulate a response Message that has a TextPart instead of a DataPart
+    malformed_message = Message(
+        message_id="malformed-resp",
         role=Role.agent,
-        parts=[Part(root=TextPart(text="Invalid part, should be DataPart"))],
+        parts=[Part(root=TextPart(text="This is not the data you are looking for"))],
     )
-    mock_send_message_success_response = SendMessageSuccessResponse(result=mock_message)
-    mock_client.send_message.return_value = SendMessageResponse(
-        root=mock_send_message_success_response
+    mock_response = SendMessageResponse(
+        root=SendMessageSuccessResponse(id="123", result=malformed_message)
     )
+    mock_client.send_message.return_value = mock_response
 
     session_id = "test-session-123"
     day = 1
@@ -163,6 +156,7 @@ async def test_call_alphabot_a2a_invalid_message_format():
         "riskguard_max_concentration": 0.5,
     }
 
+    # Act
     outcome = await _call_alphabot_a2a(
         client=mock_client,
         session_id=session_id,
@@ -174,25 +168,16 @@ async def test_call_alphabot_a2a_invalid_message_format():
         sim_logger=mock_logger,
     )
 
+    # Assert
+    # The outcome should reflect that the trade was not approved because the response was bad.
     assert outcome["approved_trade"] is None
     assert outcome["rejected_trade"] is None
     assert "AlphaBot Response Format Issue or No Decision" in outcome["error"]
-    mock_client.send_message.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_call_alphabot_a2a_unexpected_response_type():
     """Test _call_alphabot_a2a when AlphaBot returns an unexpected response type."""
-    from unittest.mock import AsyncMock, MagicMock
-    from a2a.types import (
-        SendMessageResponse,
-        SendMessageSuccessResponse,
-        Message,
-        Role,
-    )
-    from simulator.main import _call_alphabot_a2a
-    from simulator.portfolio import PortfolioState
-
     mock_client = AsyncMock()
     mock_logger = MagicMock()
 

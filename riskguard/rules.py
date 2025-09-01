@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict
+
+from common.models import PortfolioState, TradeProposal
 
 # Import defaults from the common config
 from common.config import (
@@ -20,8 +21,8 @@ class RiskCheckResult:
 
 
 def check_trade_risk_logic(
-    trade_proposal: Dict[str, Any],
-    portfolio_state: Dict[str, Any],
+    trade_proposal: TradeProposal,
+    portfolio_state: PortfolioState,
     max_pos_size: float = DEFAULT_RISKGUARD_MAX_POS_SIZE,  # Use imported default
     max_concentration: float = DEFAULT_RISKGUARD_MAX_CONCENTRATION,  # Use imported default
 ) -> RiskCheckResult:
@@ -29,8 +30,8 @@ def check_trade_risk_logic(
     Encapsulates the risk checking logic, using provided limits.
 
     Args:
-        trade_proposal: Dict with {'action': 'BUY'/'SELL', 'ticker': str, 'quantity': int, 'price': float}
-        portfolio_state: Dict with current {'cash': float, 'shares': int, 'total_value': float}
+        trade_proposal: TradeProposal model instance.
+        portfolio_state: PortfolioState model instance.
 
     Returns:
         RiskCheckResult indicating approval status and reason.
@@ -38,10 +39,10 @@ def check_trade_risk_logic(
     logger.info(f"Checking proposal: {trade_proposal}")
 
     # Basic validation
-    ticker = trade_proposal.get("ticker")
-    action = trade_proposal.get("action")
-    quantity = trade_proposal.get("quantity")
-    price = trade_proposal.get("price")
+    ticker = trade_proposal.ticker
+    action = trade_proposal.action
+    quantity = trade_proposal.quantity
+    price = trade_proposal.price
 
     # Ensure all required fields are present and have correct types
     if not (
@@ -68,9 +69,9 @@ def check_trade_risk_logic(
         )
 
     # Get portfolio details safely
-    cash = portfolio_state.get("cash", 0.0)
-    current_shares = portfolio_state.get("shares", 0)
-    total_value = portfolio_state.get("total_value", 0.0)
+    cash = portfolio_state.cash
+    current_shares = portfolio_state.shares
+    total_value = portfolio_state.total_value
     if total_value <= 0:
         logger.warning("Invalid total portfolio value for risk check.")
         return RiskCheckResult(
