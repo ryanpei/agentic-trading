@@ -926,6 +926,39 @@ class SimulationRunParams(BaseModel):
         return self.model_dump()
 
 
+def _render_error_page(
+    request: Request, error_message: str, form_values: Dict[str, Any]
+) -> HTMLResponse:
+    """Helper function to render the main page with an error message."""
+    template_context = {
+        "request": request,
+        "status": {
+            "message": error_message,
+            "is_error": True,
+        },
+        "params": form_values,
+        "DEFAULT_ALPHABOT_SHORT_SMA": defaults.DEFAULT_ALPHABOT_SHORT_SMA,
+        "DEFAULT_ALPHABOT_LONG_SMA": defaults.DEFAULT_ALPHABOT_LONG_SMA,
+        "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
+        "DEFAULT_ALPHABOT_URL": os.environ.get(
+            "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
+        ).rstrip("/"),
+        "DEFAULT_RISKGUARD_URL": os.environ.get(
+            "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
+        ).rstrip("/"),
+        "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
+        "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
+        "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,
+        "DEFAULT_SIM_INITIAL_CASH": defaults.DEFAULT_SIM_INITIAL_CASH,
+        "DEFAULT_SIM_INITIAL_PRICE": defaults.DEFAULT_SIM_INITIAL_PRICE,
+        "DEFAULT_SIM_VOLATILITY": defaults.DEFAULT_SIM_VOLATILITY,
+        "DEFAULT_SIM_TREND": defaults.DEFAULT_SIM_TREND,
+    }
+    return templates.TemplateResponse(
+        request=request, name="index.html", context=template_context
+    )
+
+
 @app.post("/run_simulation", response_class=HTMLResponse)
 async def handle_run_simulation(
     request: Request,
@@ -953,6 +986,21 @@ async def handle_run_simulation(
     # with the global simulation_status dictionary. In a production environment, you might want
     # to implement a proper queuing mechanism or allow concurrent simulations with proper isolation.
 
+    form_values = {
+        "alphabot_short_sma": alphabot_short_sma,
+        "alphabot_long_sma": alphabot_long_sma,
+        "alphabot_trade_qty": alphabot_trade_qty,
+        "sim_days": sim_days,
+        "sim_initial_cash": sim_initial_cash,
+        "sim_initial_price": sim_initial_price,
+        "sim_volatility": sim_volatility,
+        "sim_trend": sim_trend,
+        "riskguard_url": riskguard_url,
+        "riskguard_max_pos_size": riskguard_max_pos_size,
+        "riskguard_max_concentration": riskguard_max_concentration,
+        "alphabot_url": alphabot_url,
+    }
+
     try:
         sim_params = SimulationRunParams(
             alphabot_short_sma=alphabot_short_sma,
@@ -971,73 +1019,13 @@ async def handle_run_simulation(
         params_dict = sim_params.to_dict()
     except ValidationError as e:
         logger.error(f"Simulation parameter validation failed: {e}")
-        # Render the main page with error message
-        template_context = {
-            "request": request,
-            "status": {
-                "message": f"Invalid simulation parameters: {e}",
-                "is_error": True,
-            },
-            "params": {
-                k: v
-                for k, v in locals().items()
-                if k in SimulationRunParams.model_fields
-                and k not in ["sim_params", "params_dict", "e", "request", "results"]
-            },
-            "DEFAULT_ALPHABOT_SHORT_SMA": defaults.DEFAULT_ALPHABOT_SHORT_SMA,
-            "DEFAULT_ALPHABOT_LONG_SMA": defaults.DEFAULT_ALPHABOT_LONG_SMA,
-            "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
-            "DEFAULT_ALPHABOT_URL": os.environ.get(
-                "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
-            ).rstrip("/"),
-            "DEFAULT_RISKGUARD_URL": os.environ.get(
-                "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
-            ).rstrip("/"),
-            "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
-            "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
-            "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,
-            "DEFAULT_SIM_INITIAL_CASH": defaults.DEFAULT_SIM_INITIAL_CASH,
-            "DEFAULT_SIM_INITIAL_PRICE": defaults.DEFAULT_SIM_INITIAL_PRICE,
-            "DEFAULT_SIM_VOLATILITY": defaults.DEFAULT_SIM_VOLATILITY,
-            "DEFAULT_SIM_TREND": defaults.DEFAULT_SIM_TREND,
-        }
-        return templates.TemplateResponse(
-            request=request, name="index.html", context=template_context
+        return _render_error_page(
+            request, f"Invalid simulation parameters: {e}", form_values
         )
     except Exception as e:  # Catch other unexpected errors during param processing
         logger.error(f"Unexpected error processing parameters: {e}", exc_info=True)
-        # Render the main page with error message
-        template_context = {
-            "request": request,
-            "status": {
-                "message": f"Error processing parameters: {e}",
-                "is_error": True,
-            },
-            "params": {
-                k: v
-                for k, v in locals().items()
-                if k in SimulationRunParams.model_fields
-                and k not in ["sim_params", "params_dict", "e", "request", "results"]
-            },
-            "DEFAULT_ALPHABOT_SHORT_SMA": defaults.DEFAULT_ALPHABOT_SHORT_SMA,
-            "DEFAULT_ALPHABOT_LONG_SMA": defaults.DEFAULT_ALPHABOT_LONG_SMA,
-            "DEFAULT_ALPHABOT_TRADE_QTY": defaults.DEFAULT_ALPHABOT_TRADE_QTY,
-            "DEFAULT_ALPHABOT_URL": os.environ.get(
-                "ALPHABOT_SERVICE_URL", defaults.DEFAULT_ALPHABOT_URL
-            ).rstrip("/"),
-            "DEFAULT_RISKGUARD_URL": os.environ.get(
-                "RISKGUARD_SERVICE_URL", defaults.DEFAULT_RISKGUARD_URL
-            ).rstrip("/"),
-            "DEFAULT_RISKGUARD_MAX_POS_SIZE": defaults.DEFAULT_RISKGUARD_MAX_POS_SIZE,
-            "DEFAULT_RISKGUARD_MAX_CONCENTRATION": defaults.DEFAULT_RISKGUARD_MAX_CONCENTRATION,
-            "DEFAULT_SIM_DAYS": defaults.DEFAULT_SIM_DAYS,
-            "DEFAULT_SIM_INITIAL_CASH": defaults.DEFAULT_SIM_INITIAL_CASH,
-            "DEFAULT_SIM_INITIAL_PRICE": defaults.DEFAULT_SIM_INITIAL_PRICE,
-            "DEFAULT_SIM_VOLATILITY": defaults.DEFAULT_SIM_VOLATILITY,
-            "DEFAULT_SIM_TREND": defaults.DEFAULT_SIM_TREND,
-        }
-        return templates.TemplateResponse(
-            request=request, name="index.html", context=template_context
+        return _render_error_page(
+            request, f"Error processing parameters: {e}", form_values
         )
 
     logger.info(f"Received simulation request with validated params: {params_dict}")
