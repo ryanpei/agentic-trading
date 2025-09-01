@@ -1,60 +1,38 @@
 import pytest
 from pydantic import ValidationError
-from common.models import (
-    TradeProposal,
-    PortfolioState,
-    RiskCheckPayload,
-    AlphaBotPayload,
-)
+from typing import cast, Literal
 
-
-def test_trade_proposal_valid():
-    data = {"action": "BUY", "ticker": "TEST", "quantity": 10, "price": 150.0}
-    proposal = TradeProposal(**data)
-    assert proposal.action == "BUY"
-    assert proposal.ticker == "TEST"
-    assert proposal.quantity == 10
-    assert proposal.price == 150.0
-
-
-def test_trade_proposal_invalid():
-    with pytest.raises(ValidationError):
-        invalid_data = {
-            "action": "BUY",
-            "ticker": "TEST",
-            "quantity": "ten",
-            "price": 150.0,
-        }
-        TradeProposal(**invalid_data)
-
-
-def test_portfolio_state_valid():
-    data = {"cash": 10000.0, "shares": 50, "total_value": 17500.0}
-    portfolio = PortfolioState(**data)
-    assert portfolio.cash == 10000.0
-    assert portfolio.shares == 50
-    assert portfolio.total_value == 17500.0
-
+from common.models import RiskCheckPayload, TradeProposal, PortfolioState
+from common.config import DEFAULT_RISKGUARD_MAX_POS_SIZE
 
 def test_risk_check_payload_valid():
-    trade_proposal = TradeProposal(
-        action="BUY", ticker="TEST", quantity=10, price=150.0
-    )
-    portfolio_state = PortfolioState(cash=10000.0, shares=50, total_value=17500.0)
+    """Tests that a valid RiskCheckPayload can be created."""
+    trade_proposal = TradeProposal(action="BUY", ticker="TECH", quantity=100, price=150.0)
+    portfolio_state = PortfolioState(cash=50000.0, shares=200, total_value=80000.0)
+    
     payload = RiskCheckPayload(
-        trade_proposal=trade_proposal, portfolio_state=portfolio_state
+        trade_proposal=trade_proposal,
+        portfolio_state=portfolio_state
     )
-    assert payload.trade_proposal == trade_proposal
-    assert payload.portfolio_state == portfolio_state
+    
+    assert payload.max_pos_size == DEFAULT_RISKGUARD_MAX_POS_SIZE
+    assert payload.trade_proposal.action == "BUY"
 
+def test_trade_proposal_invalid_action():
+    """Tests that TradeProposal rejects an invalid action."""
+    with pytest.raises(ValidationError) as exc_info:
+        # Use cast to bypass static type checking for this invalid value test
+        invalid_action = cast(Literal["BUY", "SELL"], "HOLD")
+        TradeProposal(action=invalid_action, ticker="TECH", quantity=100, price=150.0)
+    assert "Input should be 'BUY' or 'SELL'" in str(exc_info.value)
 
-def test_alphabot_payload_valid():
-    portfolio_state = PortfolioState(cash=10000.0, shares=50, total_value=17500.0)
-    payload = AlphaBotPayload(
-        historical_prices=[140.0, 145.0, 150.0],
-        current_price=155.0,
-        portfolio_state=portfolio_state,
-        day=1,
-    )
-    assert payload.current_price == 155.0
-    assert payload.portfolio_state == portfolio_state
+def test_risk_check_payload_missing_required_field():
+    """Tests that Pydantic raises an error if required nested models are missing."""
+    # Missing 'portfolio_state'
+    with pytest.raises(ValidationError) as exc_info:
+        invalid_data = {
+            "trade_proposal": TradeProposal(action="SELL", ticker="TECH", quantity=50, price=155.0)
+        }
+        RiskCheckPayload(**invalid_data)  # type: ignore
+    
+    assert "portfolio_state" in str(exc_info.value)

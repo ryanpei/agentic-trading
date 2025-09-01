@@ -6,24 +6,11 @@ from typing import Optional  # Import Optional
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.sessions import InMemorySessionService, Session
 from google.adk.agents import BaseAgent  # Import BaseAgent for type hinting
+from google.adk.events import Event, EventActions
+from google.genai import types as genai_types
+
 from a2a.server.agent_execution import RequestContext
 from a2a.server.events import EventQueue
-from a2a.server.tasks import TaskUpdater
-
-
-@pytest.fixture
-def task_updater_fixture(mocker):
-    """Provides a factory for creating real TaskUpdater instances with a new mocked EventQueue for each call."""
-
-    def factory(task_id, context_id):
-        # Create a new mock_event_queue for each TaskUpdater instance
-        mock_event_queue = mocker.AsyncMock(spec=EventQueue)
-        task_updater = TaskUpdater(
-            event_queue=mock_event_queue, task_id=task_id, context_id=context_id
-        )
-        return task_updater, mock_event_queue
-
-    return factory
 
 
 @pytest_asyncio.fixture
@@ -69,67 +56,68 @@ def base_trade_proposal() -> dict:
     }
 
 
-@pytest.fixture(params=["alphabot.agent_executor", "riskguard.agent_executor"])
-def mock_runner(request, mocker):
-    """Parameterized fixture to mock the Runner for different agents."""
-    with patch(f"{request.param}.Runner") as mock:
-        mock_runner_instance = mock.return_value
-        mock_runner_instance.session_service = mocker.AsyncMock()
-        mock_runner_instance.session_service.get_session = mocker.AsyncMock(
-            return_value=None
+@pytest.fixture
+def mock_runner_factory(mocker):
+    """Factory fixture to create a mock Runner for a specific agent."""
+
+    def _factory(agent_module_path: str):
+        with patch(f"{agent_module_path}.Runner") as mock:
+            mock_runner_instance = mock.return_value
+            mock_runner_instance.session_service = mocker.AsyncMock()
+            mock_runner_instance.session_service.get_session = mocker.AsyncMock(
+                return_value=None
+            )
+            mock_runner_instance.session_service.create_session = mocker.AsyncMock(
+                return_value=mocker.MagicMock(id="test_session_id")
+            )
+            return mock_runner_instance
+
+    return _factory
+
+
+@pytest.fixture
+def adk_mock_alphabot_generator():
+    """
+    Mocks the async generator for AlphaBot, yielding ADK Events instead of
+    raw genai types. This aligns with the behavior of the ADK Runner.
+    """
+
+    async def _generator(final_state_delta, final_reason):
+        # Yield an event with the state delta
+        yield Event(
+            author="test_author",
+            actions=EventActions(state_delta=final_state_delta)
         )
-        mock_runner_instance.session_service.create_session = mocker.AsyncMock(
-            return_value=mocker.MagicMock(id="test_session_id")
+        # Yield a final event with the reason text
+        yield Event(
+            author="test_author",
+            content=genai_types.Content(parts=[genai_types.Part(text=final_reason)]),
+            turn_complete=True,
         )
-        yield mock
+
+    return _generator
 
 
-async def adk_mock_alphabot_generator(final_state_delta, final_reason):
-    """Mocks the async generator for AlphaBot."""
-    yield MagicMock(
-        actions=MagicMock(state_delta=final_state_delta),
-        content=MagicMock(parts=[]),
-        is_final_response=lambda: False,
-    )
-    yield MagicMock(
-        actions=MagicMock(state_delta=None),
-        content=MagicMock(parts=[MagicMock(text=final_reason)]),
-        is_final_response=lambda: True,
-    )
+@pytest.fixture
+def adk_mock_riskguard_generator():
+    """
+    Mocks the async generator for RiskGuard, yielding a single ADK Event
+    with a function response. This aligns with the behavior of the ADK Runner.
+    """
 
+    async def _generator(result_name, result_data):
+        yield Event(
+            author="test_author",
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name=result_name, response=result_data
+                        )
+                    )
+                ]
+            ),
+            turn_complete=True,
+        )
 
-async def adk_mock_riskguard_generator(result_name, result_data):
-    """Mocks the async generator for RiskGuard."""
-    function_response_part = MagicMock()
-    function_response_part.function_response.name = result_name
-    function_response_part.function_response.response = result_data
-    yield MagicMock(
-        content=MagicMock(parts=[function_response_part]),
-        is_final_response=lambda: True,
-    )
-
-
-async def run_executor_test(
-    executor, request_message, mock_runner_instance, task_updater=None
-):
-    """Helper to run an agent executor's execute method for testing."""
-    executor._adk_runner = mock_runner_instance
-    request_obj = MagicMock()
-    request_obj.message = request_message  # Directly assign the message object
-
-    context = RequestContext(
-        task_id="test-task-123",
-        context_id="test-context-456",
-        request=request_obj,
-    )
-
-    # If a real TaskUpdater is not passed, we don't need a real EventQueue
-    event_queue = task_updater.event_queue if task_updater else EventQueue()
-
-    # Patch the TaskUpdater lookup within the executor's execute method
-    with patch("a2a.server.tasks.task_updater.TaskUpdater") as mock_task_updater_class:
-        if task_updater:
-            mock_task_updater_class.return_value = task_updater
-        await executor.execute(context, event_queue)
-
-    return context
+    return _generator

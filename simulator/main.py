@@ -360,7 +360,7 @@ async def _call_alphabot_a2a(
         )
     )
     # The portfolio data should be the top-level object in its part for the executor to parse correctly.
-    portfolio_state_part = Part(root=A2ADataPart(data=portfolio_model.model_dump()))
+    portfolio_state_part = Part(root=A2ADataPart(data=portfolio_model.model_dump())) # FIXED
 
     # 3. Define the agent parameters to be sent in the message metadata.
     agent_params_metadata = {
@@ -399,15 +399,10 @@ async def _call_alphabot_a2a(
         "error": None,
     }
     try:
-        # The client instance is already passed with an httpx_client
         response: SendMessageResponse = await client.send_message(sdk_request)
-
-        # The response.root can be either JSONRPCErrorResponse or SendMessageSuccessResponse
         root_response_part = response.root
 
-        if isinstance(
-            root_response_part, JSONRPCErrorResponse
-        ):  # Check if it's an error response
+        if isinstance(root_response_part, JSONRPCErrorResponse):
             actual_error = root_response_part.error
             sim_logger.error(
                 f"A2A Error from AlphaBot: {actual_error.code} - {actual_error.message}"
@@ -415,69 +410,35 @@ async def _call_alphabot_a2a(
             outcome["error"] = (
                 f"A2A Error: {actual_error.code} - {actual_error.message}"
             )
-        elif isinstance(
-            root_response_part, SendMessageSuccessResponse
-        ):  # Check if it's a success response
-            task_result = root_response_part.result
-            if isinstance(task_result, A2AMessage):
-                sim_logger.warning(
-                    "Received a direct message response, expected a task."
+        elif isinstance(root_response_part, SendMessageSuccessResponse):
+            # We expect a Message, but the type hint for SendMessageSuccessResponse.result
+            # might still include Task for broader compatibility.
+            # Explicitly check and handle if it's not a Message.
+            result_message = root_response_part.result
+            if not isinstance(result_message, A2AMessage):
+                sim_logger.error(
+                    f"A2A Response Format Issue: Expected Message, but got {type(result_message)}"
                 )
-                outcome["error"] = (
-                    "Received unexpected direct message response from agent."
-                )
+                outcome["error"] = "A2A Response Format Issue: Expected Message"
                 return outcome
-            sim_logger.info(
-                f"A2A Task {task_result.id} completed with state: {task_result.status.state}"
-            )
 
             result_data = None
-            if task_result.artifacts:
-                trade_decision_artifact = next(
-                    (
-                        a
-                        for a in task_result.artifacts
-                        if a.name
-                        == defaults.DEFAULT_ALPHABOT_TRADE_DECISION_ARTIFACT_NAME
-                    ),
-                    None,
-                )
-
-                if trade_decision_artifact and trade_decision_artifact.parts:
-                    art_part_root = trade_decision_artifact.parts[
-                        0
-                    ].root  # Access root of Part Union
-                    if isinstance(art_part_root, A2ADataPart):
-                        result_data = art_part_root.data
-                        sim_logger.info(f"  >> Extracted Result Data: {result_data}")
-                    else:
-                        sim_logger.warning(
-                            f"  >> Unexpected part type in artifact: {type(art_part_root)}"
-                        )
-                else:
-                    sim_logger.warning(
-                        "  >> 'trade_decision' artifact not found or empty."
-                    )
-                    if task_result.status.message and task_result.status.message.parts:
-                        status_text_part_root = task_result.status.message.parts[0].root
-                        # Check if it's TextPart or DataPart with text
-                        if (
-                            isinstance(status_text_part_root, A2ADataPart)
-                            and "text" in status_text_part_root.data
-                        ):
-                            sim_logger.info(
-                                f"  >> Status Text: '{status_text_part_root.data['text']}'"
-                            )
-                        # Add similar check for a2a.types.TextPart if that's a possibility
+            if result_message.parts and isinstance(
+                result_message.parts[0].root, A2ADataPart
+            ):
+                result_data = result_message.parts[0].root.data
+                sim_logger.info(f"  >> Extracted Result Data: {result_data}")
             else:
-                sim_logger.warning("  >> No artifacts found in A2A task result.")
+                sim_logger.warning(
+                    "  >> AlphaBot returned an invalid message format (no DataPart found)."
+                )
+                outcome["error"] = "AlphaBot Response Format Issue: No DataPart"
 
             if result_data and isinstance(result_data, dict):
                 outcome["reason"] = result_data.get("reason", "Reason not provided.")
                 if result_data.get("approved") is True:
                     outcome["approved_trade"] = result_data.get(
-                        "trade_proposal",
-                        result_data,  # Fallback to result_data if no specific proposal key
+                        "trade_proposal", result_data
                     )
                     sim_logger.info(
                         f"    >>> Approved Trade: {outcome['approved_trade']} (Reason: {outcome['reason']})"
@@ -489,36 +450,20 @@ async def _call_alphabot_a2a(
                     sim_logger.info(
                         f"    >>> Rejected Trade: {outcome['rejected_trade']} (Reason: {outcome['reason']})"
                     )
-                else:  # Handle cases where 'approved' key is missing but we have other status info
+                else:
                     sim_logger.info(
                         f"  >> Received status update from AlphaBot: {result_data.get('status', 'Unknown status')}"
                     )
-                    # If there's a general message in result_data, use it as reason
                     if "message" in result_data:
                         outcome["reason"] = result_data["message"]
-
-            elif (
-                task_result.status.message and task_result.status.message.parts
-            ):  # If no artifact data, check status message
-                status_text_part_root = task_result.status.message.parts[0].root
-                if (
-                    isinstance(status_text_part_root, A2ADataPart)
-                    and "text" in status_text_part_root.data
-                ):
-                    outcome["reason"] = status_text_part_root.data["text"]
-                    sim_logger.info(
-                        f"  >> Reason from status message: {outcome['reason']}"
-                    )
-                # Add similar check for a2a.types.TextPart if relevant
-
             else:
                 sim_logger.warning(
-                    "A2A response lacked expected result data structure or conclusive status message."
+                    "AlphaBot response lacked expected result data structure or conclusive status message."
                 )
-                outcome["error"] = "A2A Response Format Issue or No Decision"
-        else:  # Neither error nor a Task result
+                outcome["error"] = "AlphaBot Response Format Issue or No Decision"
+        else:
             sim_logger.error(
-                f"A2A response was not a Task or an error: {response.model_dump_json(exclude_none=True)}"
+                f"A2A response was not a SendMessageSuccessResponse or an error: {response.model_dump_json(exclude_none=True)}"
             )
             outcome["error"] = "Invalid A2A Response Type"
 
@@ -529,14 +474,12 @@ async def _call_alphabot_a2a(
         outcome["error"] = (
             f"AlphaBot Connection/HTTP Error: {http_err.status_code} - {http_err.message}"
         )
-        # Re-raise as ConnectionError for the main simulation loop to catch it distinctly if needed
         raise ConnectionError(
             f"AlphaBot A2A HTTP Error: {http_err.message}"
         ) from http_err
     except A2AClientJSONError as json_err:
         sim_logger.error(f"A2A JSON Error from AlphaBot: {json_err.message}")
         outcome["error"] = f"AlphaBot JSON Response Error: {json_err.message}"
-        # Not re-raising, allow outcome to be returned.
     except Exception as e:
         sim_logger.error(f"General A2A Client/Processing Error: {e}", exc_info=True)
         outcome["error"] = f"A2A Processing Error: {e}"

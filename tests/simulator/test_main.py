@@ -40,6 +40,194 @@ def test_read_main():
     assert "Agentic Trading Simulator" in response.text
 
 
+@pytest.mark.asyncio
+async def test_call_alphabot_a2a_success():
+    """Test _call_alphabot_a2a with a successful message response."""
+    from unittest.mock import AsyncMock, MagicMock
+    from a2a.types import (
+        SendMessageResponse,
+        SendMessageSuccessResponse,
+        Message,
+        DataPart,
+        Part,
+        Role,
+        TextPart,
+    )
+    from simulator.main import _call_alphabot_a2a
+    from simulator.portfolio import PortfolioState
+
+    mock_client = AsyncMock()
+    mock_logger = MagicMock()
+
+    # Mock the A2AClient.send_message to return a successful Message
+    expected_trade_proposal = {"action": "BUY", "quantity": 10, "price": 100.0, "ticker": "TEST"}
+    expected_reason = "Test approved reason."
+    mock_message_data = {
+        "approved": True,
+        "trade_proposal": expected_trade_proposal,
+        "reason": expected_reason,
+    }
+    mock_message = Message(
+        message_id="mock_msg_id",
+        context_id="mock_context_id",
+        task_id="mock_task_id",
+        role=Role.agent,
+        parts=[Part(root=DataPart(data=mock_message_data))]
+    )
+    mock_send_message_success_response = SendMessageSuccessResponse(result=mock_message)
+    mock_client.send_message.return_value = SendMessageResponse(root=mock_send_message_success_response)
+
+    # Prepare input for the function
+    session_id = "test-session-123"
+    day = 1
+    current_price = 100.0
+    historical_prices = [90.0, 95.0]
+    portfolio = PortfolioState(cash=10000.0, shares=0, total_value=10000.0)
+    params = {
+        "alphabot_short_sma": 10, "alphabot_long_sma": 20, "alphabot_trade_qty": 10,
+        "riskguard_url": "http://localhost:8001", "riskguard_max_pos_size": 1000,
+        "riskguard_max_concentration": 0.5
+    }
+
+    # Call the function
+    outcome = await _call_alphabot_a2a(
+        client=mock_client,
+        session_id=session_id,
+        day=day,
+        current_price=current_price,
+        historical_prices=historical_prices,
+        portfolio=portfolio,
+        params=params,
+        sim_logger=mock_logger,
+    )
+
+    # Assertions
+    assert outcome["approved_trade"] == expected_trade_proposal
+    assert outcome["rejected_trade"] is None
+    assert outcome["reason"] == expected_reason
+    assert outcome["error"] is None
+    mock_client.send_message.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_call_alphabot_a2a_invalid_message_format():
+    """Test _call_alphabot_a2a when AlphaBot returns an invalid message format."""
+    from unittest.mock import AsyncMock, MagicMock
+    from a2a.types import (
+        SendMessageResponse,
+        SendMessageSuccessResponse,
+        Message,
+        DataPart,
+        Part,
+        Role,
+        TextPart,
+    )
+    from simulator.main import _call_alphabot_a2a
+    from simulator.portfolio import PortfolioState
+
+    mock_client = AsyncMock()
+    mock_logger = MagicMock()
+
+    # Mock the A2AClient.send_message to return a Message without DataPart
+    mock_message = Message(
+        message_id="mock_msg_id",
+        context_id="mock_context_id",
+        task_id="mock_task_id",
+        role=Role.agent,
+        parts=[Part(root=TextPart(text="Invalid part, should be DataPart"))]
+    )
+    mock_send_message_success_response = SendMessageSuccessResponse(result=mock_message)
+    mock_client.send_message.return_value = SendMessageResponse(root=mock_send_message_success_response)
+
+    session_id = "test-session-123"
+    day = 1
+    current_price = 100.0
+    historical_prices = [90.0, 95.0]
+    portfolio = PortfolioState(cash=10000.0, shares=0, total_value=10000.0)
+    params = {
+        "alphabot_short_sma": 10, "alphabot_long_sma": 20, "alphabot_trade_qty": 10,
+        "riskguard_url": "http://localhost:8001", "riskguard_max_pos_size": 1000,
+        "riskguard_max_concentration": 0.5
+    }
+
+    outcome = await _call_alphabot_a2a(
+        client=mock_client,
+        session_id=session_id,
+        day=day,
+        current_price=current_price,
+        historical_prices=historical_prices,
+        portfolio=portfolio,
+        params=params,
+        sim_logger=mock_logger,
+    )
+
+    assert outcome["approved_trade"] is None
+    assert outcome["rejected_trade"] is None
+    assert "AlphaBot Response Format Issue or No Decision" in outcome["error"]
+    mock_client.send_message.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_call_alphabot_a2a_unexpected_response_type():
+    """Test _call_alphabot_a2a when AlphaBot returns an unexpected response type."""
+    from unittest.mock import AsyncMock, MagicMock
+    from a2a.types import (
+        SendMessageResponse,
+        SendMessageSuccessResponse,
+        Message,
+        DataPart,
+        Part,
+        Role,
+        TextPart,
+    )
+    from simulator.main import _call_alphabot_a2a
+    from simulator.portfolio import PortfolioState
+
+    mock_client = AsyncMock()
+    mock_logger = MagicMock()
+
+    # Mock the A2AClient.send_message to return a non-Message object as result
+    mock_send_message_success_response = SendMessageSuccessResponse(
+        result=Message(
+            message_id="mock_msg_id",
+            context_id="mock_context_id",
+            task_id="mock_task_id",
+            role=Role.agent,
+            parts=[],
+        )
+    )
+    # Overwrite the result with a mock to trigger the error condition being tested
+    mock_send_message_success_response.result = MagicMock(spec=object)
+    mock_client.send_message.return_value = SendMessageResponse(root=mock_send_message_success_response)
+
+    session_id = "test-session-123"
+    day = 1
+    current_price = 100.0
+    historical_prices = [90.0, 95.0]
+    portfolio = PortfolioState(cash=10000.0, shares=0, total_value=10000.0)
+    params = {
+        "alphabot_short_sma": 10, "alphabot_long_sma": 20, "alphabot_trade_qty": 10,
+        "riskguard_url": "http://localhost:8001", "riskguard_max_pos_size": 1000,
+        "riskguard_max_concentration": 0.5
+    }
+
+    outcome = await _call_alphabot_a2a(
+        client=mock_client,
+        session_id=session_id,
+        day=day,
+        current_price=current_price,
+        historical_prices=historical_prices,
+        portfolio=portfolio,
+        params=params,
+        sim_logger=mock_logger,
+    )
+
+    assert outcome["approved_trade"] is None
+    assert outcome["rejected_trade"] is None
+    assert "A2A Response Format Issue: Expected Message" in outcome["error"]
+    mock_client.send_message.assert_called_once()
+
+
 def test_run_simulation_success(mock_a2a_call):
     """Test a successful simulation run."""
     response = client.post(
