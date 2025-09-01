@@ -8,6 +8,14 @@ from google.adk.sessions import InMemorySessionService, Session
 from google.adk.agents import BaseAgent  # Import BaseAgent for type hinting
 from google.adk.events import Event, EventActions
 from google.genai import types as genai_types
+from a2a.server.events import EventQueue
+from common.models import PortfolioState, TradeProposal
+
+
+@pytest.fixture
+def event_queue() -> EventQueue:
+    """Provides a new EventQueue instance for each test."""
+    return EventQueue()
 
 
 @pytest_asyncio.fixture
@@ -37,36 +45,32 @@ def adk_ctx(
 
 
 @pytest.fixture
-def base_portfolio_state() -> dict:
+def base_portfolio_state() -> PortfolioState:
     """Provides a default portfolio state, shared across all tests."""
-    return {"cash": 100000.0, "shares": 100, "total_value": 110000.0}
+    return PortfolioState(cash=100000.0, shares=100, total_value=110000.0)
 
 
 @pytest.fixture
-def base_trade_proposal() -> dict:
+def base_trade_proposal() -> TradeProposal:
     """Provides a default 'BUY' trade proposal, shared across all tests."""
-    return {
-        "action": "BUY",
-        "ticker": "TECH",
-        "quantity": 50,
-        "price": 100.0,
-    }
+    return TradeProposal(
+        action="BUY",
+        ticker="TECH",
+        quantity=50,
+        price=100.0,
+    )
 
 
 @pytest.fixture
-def mock_runner_factory(mocker):
+def mock_runner_factory():
     """Factory fixture to create a mock Runner for a specific agent."""
 
     def _factory(agent_module_path: str):
         with patch(f"{agent_module_path}.Runner") as mock:
             mock_runner_instance = mock.return_value
-            mock_runner_instance.session_service = mocker.AsyncMock()
-            mock_runner_instance.session_service.get_session = mocker.AsyncMock(
-                return_value=None
-            )
-            mock_runner_instance.session_service.create_session = mocker.AsyncMock(
-                return_value=mocker.MagicMock(id="test_session_id")
-            )
+            # Set the app_name on the mock_runner_instance
+            mock_runner_instance.app_name = "test_app"
+            mock_runner_instance.session_service = InMemorySessionService()
             return mock_runner_instance
 
     return _factory

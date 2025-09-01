@@ -1,4 +1,3 @@
-import json
 import asyncio
 from unittest.mock import AsyncMock, patch
 
@@ -55,7 +54,7 @@ async def test_alphabot_run_async_impl_no_signal(
             day=1,
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         events = []
@@ -71,7 +70,10 @@ async def test_alphabot_run_async_impl_no_signal(
 
 @pytest.mark.asyncio
 async def test_alphabot_run_async_impl_buy_approved(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_buy_signal,
 ):
     """Tests _run_async_impl for a BUY signal that is approved by RiskGuard."""
     adk_ctx.session.state = {"should_be_long": False}
@@ -100,53 +102,14 @@ async def test_alphabot_run_async_impl_buy_approved(
 
         mock_run_async.side_effect = mock_tool_response_generator
 
-        # Generate 35 prices that will create a BUY signal, mirroring the passing SELL test.
-        historical_prices = [
-            130,
-            128,
-            126,
-            124,
-            122,
-            120,
-            118,
-            116,
-            114,
-            112,
-            110,
-            108,
-            106,
-            104,
-            102,
-            100,
-            98,
-            96,
-            94,
-            92,
-            90,
-            88,
-            86,
-            84,
-            82,
-            80,
-            78,
-            76,
-            74,
-            72,
-            85,
-            95,
-            105,
-            115,
-            125,
-        ]
-
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_buy_signal,
             current_price=129.0,
             day=35,
             portfolio_state={"cash": 10000, "shares": 0, "total_value": 10000},
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         events = []
@@ -171,7 +134,10 @@ async def test_alphabot_run_async_impl_buy_approved(
 
 @pytest.mark.asyncio
 async def test_alphabot_run_async_impl_sell_approved(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_sell_signal,
 ):
     """Tests _run_async_impl for a SELL signal that is approved by RiskGuard."""
     adk_ctx.session.state = {"should_be_long": True}
@@ -200,55 +166,14 @@ async def test_alphabot_run_async_impl_sell_approved(
 
         mock_run_async.side_effect = mock_tool_response_generator
 
-        # Generate 35 prices that will create a SELL signal (short SMA crosses below long SMA)
-        # Start with prices in an uptrend, then sharply reverse to a downtrend
-        # This will make short SMA cross below long SMA
-        historical_prices = [
-            70,
-            72,
-            74,
-            76,
-            78,
-            80,
-            82,
-            84,
-            86,
-            88,
-            90,
-            92,
-            94,
-            96,
-            98,
-            100,
-            102,
-            104,
-            106,
-            108,
-            110,
-            112,
-            114,
-            116,
-            118,
-            120,
-            122,
-            124,
-            126,
-            128,
-            115,
-            105,
-            95,
-            85,
-            75,
-        ]
-
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_sell_signal,
             current_price=66.0,
             portfolio_state={"cash": 10000, "shares": 100, "total_value": 17000},
             day=35,
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         events = []
@@ -309,7 +234,10 @@ def test_determine_trade_proposal_no_buy_when_long(agent: AlphaBotAgent):
 
 @pytest.mark.asyncio
 async def test_alphabot_run_async_impl_sell_approved_e2e(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_sell_signal,
 ):
     """Tests the full end-to-end flow for a successful 'SELL' trade."""
     adk_ctx.session.state = {"should_be_long": True}
@@ -337,55 +265,14 @@ async def test_alphabot_run_async_impl_sell_approved_e2e(
 
         mock_run_async.side_effect = mock_tool_response_generator
 
-        # Generate 35 prices that will create a SELL signal (short SMA crosses below long SMA)
-        # Start with prices in an uptrend, then sharply reverse to a downtrend
-        # This will make short SMA cross below long SMA
-        historical_prices = [
-            70,
-            72,
-            74,
-            76,
-            78,
-            80,
-            82,
-            84,
-            86,
-            88,
-            90,
-            92,
-            94,
-            96,
-            98,
-            100,
-            102,
-            104,
-            106,
-            108,
-            110,
-            112,
-            114,
-            116,
-            118,
-            120,
-            122,
-            124,
-            126,
-            128,
-            115,
-            105,
-            95,
-            85,
-            75,
-        ]
-
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_sell_signal,
             current_price=66.0,
             portfolio_state={"cash": 10000, "shares": 100, "total_value": 17000},
             day=35,
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         events = []
@@ -424,7 +311,10 @@ async def test_alphabot_run_async_impl_invalid_input(
 
 @pytest.mark.asyncio
 async def test_alphabot_run_async_impl_buy_rejected(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_buy_signal,
 ):
     """Tests _run_async_impl for a BUY signal that is rejected by RiskGuard."""
     adk_ctx.session.state = {"should_be_long": False}
@@ -452,53 +342,14 @@ async def test_alphabot_run_async_impl_buy_rejected(
 
         mock_run_async.side_effect = mock_tool_response_generator
 
-        # Generate 35 prices that will create a BUY signal, mirroring the passing SELL test.
-        historical_prices = [
-            130,
-            128,
-            126,
-            124,
-            122,
-            120,
-            118,
-            116,
-            114,
-            112,
-            110,
-            108,
-            106,
-            104,
-            102,
-            100,
-            98,
-            96,
-            94,
-            92,
-            90,
-            88,
-            86,
-            84,
-            82,
-            80,
-            78,
-            76,
-            74,
-            72,
-            85,
-            95,
-            105,
-            115,
-            125,
-        ]
-
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_buy_signal,
             current_price=129.0,
             day=35,
             portfolio_state={"cash": 10000, "shares": 0, "total_value": 10000},
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         events = []
@@ -543,7 +394,10 @@ def test_determine_trade_proposal_no_sell_when_long_no_shares(agent: AlphaBotAge
 
 @pytest.mark.asyncio
 async def test_alphabot_run_async_impl_state_correction_sell_no_shares(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_sell_signal,
 ):
     """Tests _run_async_impl for a SELL signal that triggers state correction due to no shares held."""
     adk_ctx.session.state = {"should_be_long": True}
@@ -572,49 +426,8 @@ async def test_alphabot_run_async_impl_state_correction_sell_no_shares(
 
         mock_run_async.side_effect = mock_tool_response_generator
 
-        # Generate 35 prices that will create a SELL signal (short SMA crosses below long SMA)
-        # Start with prices in an uptrend, then sharply reverse to a downtrend
-        # This will make short SMA cross below long SMA
-        historical_prices = [
-            70,
-            72,
-            74,
-            76,
-            78,
-            80,
-            82,
-            84,
-            86,
-            88,
-            90,
-            92,
-            94,
-            96,
-            98,
-            100,
-            102,
-            104,
-            106,
-            108,
-            110,
-            112,
-            114,
-            116,
-            118,
-            120,
-            122,
-            124,
-            126,
-            128,
-            115,
-            105,
-            95,
-            85,
-            75,
-        ]
-
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_sell_signal,
             current_price=66.0,
             portfolio_state={
                 "cash": 10000,
@@ -624,7 +437,7 @@ async def test_alphabot_run_async_impl_state_correction_sell_no_shares(
             day=35,
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         events = []
@@ -642,7 +455,10 @@ async def test_alphabot_run_async_impl_state_correction_sell_no_shares(
 
 @pytest.mark.asyncio
 async def test_alphabot_concurrency(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_buy_signal,
 ):
     """Tests that the agent can handle concurrent requests without race conditions."""
     adk_ctx.session.state = {"should_be_long": False}
@@ -671,53 +487,14 @@ async def test_alphabot_concurrency(
 
         mock_run_async.side_effect = mock_tool_response_generator
 
-        # Generate 35 prices that will create a BUY signal, mirroring the passing SELL test.
-        historical_prices = [
-            130,
-            128,
-            126,
-            124,
-            122,
-            120,
-            118,
-            116,
-            114,
-            112,
-            110,
-            108,
-            106,
-            104,
-            102,
-            100,
-            98,
-            96,
-            94,
-            92,
-            90,
-            88,
-            86,
-            84,
-            82,
-            80,
-            78,
-            76,
-            74,
-            72,
-            85,
-            95,
-            105,
-            115,
-            125,
-        ]
-
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_buy_signal,
             current_price=129.0,
             day=35,
             portfolio_state={"cash": 10000, "shares": 0, "total_value": 10000},
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         async def run_agent_and_collect_events():
@@ -743,7 +520,10 @@ async def test_alphabot_concurrency(
 
 @pytest.mark.asyncio
 async def test_alphabot_does_not_repropose_rejected_trade(
-    agent: AlphaBotAgent, adk_ctx: InvocationContext, alphabot_input_data_factory
+    agent: AlphaBotAgent,
+    adk_ctx: InvocationContext,
+    alphabot_input_data_factory,
+    historical_prices_buy_signal,
 ):
     """
     Tests that AlphaBot does not propose the same trade again immediately after
@@ -779,51 +559,14 @@ async def test_alphabot_does_not_repropose_rejected_trade(
         mock_run_async.side_effect = mock_tool_response_generator
 
         # 3. Market data that generates a BUY signal
-        historical_prices = [
-            130,
-            128,
-            126,
-            124,
-            122,
-            120,
-            118,
-            116,
-            114,
-            112,
-            110,
-            108,
-            106,
-            104,
-            102,
-            100,
-            98,
-            96,
-            94,
-            92,
-            90,
-            88,
-            86,
-            84,
-            82,
-            80,
-            78,
-            76,
-            74,
-            72,
-            85,
-            95,
-            105,
-            115,
-            125,
-        ]
         input_data = alphabot_input_data_factory(
-            historical_prices=historical_prices,
+            historical_prices=historical_prices_buy_signal,
             current_price=129.0,
             day=35,
             portfolio_state={"cash": 100, "shares": 0, "total_value": 100},
         )
         adk_ctx.user_content = genai_types.Content(
-            parts=[genai_types.Part(text=json.dumps(input_data))]
+            parts=[genai_types.Part(text=input_data.model_dump_json())]
         )
 
         # --- First Invocation: Propose and get rejected ---

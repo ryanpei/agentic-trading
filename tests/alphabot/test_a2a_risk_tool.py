@@ -10,11 +10,13 @@ from a2a.types import (
     Part,
     Message,
     Role,
+    TextPart,
 )
 from google.adk.tools import ToolContext
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.sessions import Session
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from common.models import PortfolioState, TradeProposal
 
 
 @pytest.fixture
@@ -61,8 +63,8 @@ def create_success_response(result_data: dict) -> SendMessageSuccessResponse:
 
 def _verify_a2a_call(
     mock_a2a_client: MagicMock,
-    expected_trade_proposal: dict,
-    expected_portfolio_state: dict,
+    expected_trade_proposal: TradeProposal,
+    expected_portfolio_state: PortfolioState,
 ):
     """Helper function to verify the payload sent to the A2AClient."""
     mock_a2a_client.send_message.assert_awaited_once()
@@ -72,8 +74,8 @@ def _verify_a2a_call(
     assert isinstance(sent_part, DataPart)
     sent_payload = sent_part.data
     assert isinstance(sent_payload, dict)
-    assert sent_payload["trade_proposal"] == expected_trade_proposal
-    assert sent_payload["portfolio_state"] == expected_portfolio_state
+    assert sent_payload["trade_proposal"] == expected_trade_proposal.model_dump()
+    assert sent_payload["portfolio_state"] == expected_portfolio_state.model_dump()
 
 
 @pytest.mark.asyncio
@@ -87,15 +89,13 @@ async def test_run_async_approved(
     """Test using shared fixtures for input data."""
     # Arrange
     args = {
-        "trade_proposal": base_trade_proposal,
-        "portfolio_state": base_portfolio_state,
+        "trade_proposal": base_trade_proposal.model_dump(),
+        "portfolio_state": base_portfolio_state.model_dump(),
     }
     expected_result = {"approved": True, "reason": "Within limits"}
     mock_response = create_success_response(expected_result)
 
-    with patch(
-        "alphabot.a2a_risk_tool.A2AClient", return_value=mock_a2a_client
-    ) as mock_client_constructor:
+    with patch("alphabot.a2a_risk_tool.A2AClient", return_value=mock_a2a_client):
         mock_a2a_client.send_message.return_value = SendMessageResponse(
             root=mock_response
         )
@@ -114,7 +114,6 @@ async def test_run_async_approved(
         response_data = response_part.function_response.response
         assert response_data == expected_result
 
-        mock_client_constructor.assert_called_once()
         _verify_a2a_call(mock_a2a_client, base_trade_proposal, base_portfolio_state)
 
 
@@ -129,15 +128,13 @@ async def test_run_async_rejected(
     """Test the tool's run_async method for a rejected trade."""
     # Arrange
     args = {
-        "trade_proposal": base_trade_proposal,
-        "portfolio_state": base_portfolio_state,
+        "trade_proposal": base_trade_proposal.model_dump(),
+        "portfolio_state": base_portfolio_state.model_dump(),
     }
     expected_result = {"approved": False, "reason": "Exceeds max position size"}
     mock_response = create_success_response(expected_result)
 
-    with patch(
-        "alphabot.a2a_risk_tool.A2AClient", return_value=mock_a2a_client
-    ) as mock_client_constructor:
+    with patch("alphabot.a2a_risk_tool.A2AClient", return_value=mock_a2a_client):
         mock_a2a_client.send_message.return_value = SendMessageResponse(
             root=mock_response
         )
@@ -156,5 +153,47 @@ async def test_run_async_rejected(
         response_data = response_part.function_response.response
         assert response_data == expected_result
 
-        mock_client_constructor.assert_called_once()
         _verify_a2a_call(mock_a2a_client, base_trade_proposal, base_portfolio_state)
+
+
+@pytest.mark.asyncio
+async def test_run_async_handles_malformed_message(
+    risk_check_tool,
+    tool_context,
+    mock_a2a_client,
+    base_trade_proposal,
+    base_portfolio_state,
+):
+    """Tests that the tool gracefully handles a malformed A2A response."""
+    # Arrange
+    args = {
+        "trade_proposal": base_trade_proposal.model_dump(),
+        "portfolio_state": base_portfolio_state.model_dump(),
+    }
+    # Simulate a response with a TextPart instead of a DataPart
+    malformed_message = Message(
+        message_id="malformed-id",
+        role=Role.agent,
+        parts=[Part(root=TextPart(text="This is not a DataPart"))],
+    )
+    mock_response = SendMessageSuccessResponse(id="123", result=malformed_message)
+
+    with patch("alphabot.a2a_risk_tool.A2AClient", return_value=mock_a2a_client):
+        mock_a2a_client.send_message.return_value = SendMessageResponse(
+            root=mock_response
+        )
+
+        # Act
+        events = [
+            event
+            async for event in risk_check_tool.run_async(
+                args=args, tool_context=tool_context
+            )
+        ]
+
+        # Assert
+        assert len(events) == 1
+        response_part = events[0].content.parts[0]
+        response_data = response_part.function_response.response
+        assert response_data["approved"] is False
+        assert "invalid message format" in response_data["reason"]
