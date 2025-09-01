@@ -49,9 +49,13 @@ class RiskGuardAgentExecutor(AgentExecutor):
             if isinstance(part, DataPart):
                 agent_input_data = part.data
 
-        if not agent_input_data or "trade_proposal" not in agent_input_data:
+        if (
+            not agent_input_data
+            or "trade_proposal" not in agent_input_data
+            or "portfolio_state" not in agent_input_data
+        ):
             logger.error(
-                f"Task {context.task_id}: Missing data payload in the message part"
+                f"Task {context.task_id}: Missing 'trade_proposal' or 'portfolio_state' in data payload"
             )
             await task_updater.failed(
                 message=task_updater.new_agent_message(

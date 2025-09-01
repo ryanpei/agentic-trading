@@ -1,7 +1,7 @@
 # common/models.py
 
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Literal
 from .config import (
     DEFAULT_ALPHABOT_LONG_SMA,
     DEFAULT_ALPHABOT_SHORT_SMA,
@@ -15,7 +15,7 @@ from .config import (
 
 
 class TradeProposal(BaseModel):
-    action: str
+    action: Literal["BUY", "SELL"]
     ticker: str
     quantity: int
     price: float
