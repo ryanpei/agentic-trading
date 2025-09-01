@@ -123,7 +123,6 @@ def test_market_data_simulator_high_volatility():
     simulator = MarketDataSimulator(initial_price=100.0, volatility=0.5, trend=0.0)
 
     # Generate prices
-    initial_price = simulator.get_current_price()
     prices = [simulator.next_price() for _ in range(100)]
 
     # With high volatility, we should see significant price movements
@@ -137,12 +136,10 @@ def test_market_data_simulator_negative_trend():
     simulator = MarketDataSimulator(initial_price=100.0, volatility=0.01, trend=-0.01)
 
     # Generate prices
-    initial_price = simulator.get_current_price()
-    prices = [simulator.next_price() for _ in range(100)]
+    [simulator.next_price() for _ in range(100)]
 
     # With negative trend, we expect the final price to generally be lower than initial
     # though volatility might cause some increases
-    final_price = simulator.get_current_price()
     # This is a probabilistic test - in most cases the final price should be lower
     # but we won't assert this strictly as it could fail due to randomness
 

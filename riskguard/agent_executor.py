@@ -70,7 +70,7 @@ class RiskGuardAgentExecutor(AgentExecutor):
             )
             return
 
-        risk_metadata = context.message.metadata or {}
+        risk_metadata = (context.message.metadata or {}) if context.message else {}
         max_pos_size = risk_metadata.get("max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE)
         max_concentration = risk_metadata.get(
             "max_concentration", DEFAULT_RISKGUARD_MAX_CONCENTRATION
@@ -176,4 +176,4 @@ class RiskGuardAgentExecutor(AgentExecutor):
         logger.warning(
             f"Cancellation not implemented for RiskGuard ADK agent task: {context.task_id}"
         )
-        task_updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        pass

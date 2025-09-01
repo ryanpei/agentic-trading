@@ -142,3 +142,5 @@ async def test_run_async_rejected(
         response_part = events[0].content.parts[0]
         response_data = response_part.function_response.response
         assert response_data == expected_result
+
+        mock_client_constructor.assert_called_once()

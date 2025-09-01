@@ -1,6 +1,6 @@
 import pytest
 import pytest_asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from typing import Optional  # Import Optional
 
 from google.adk.agents.invocation_context import InvocationContext
@@ -67,9 +67,6 @@ def base_trade_proposal() -> dict:
         "quantity": 50,
         "price": 100.0,
     }
-
-
-from unittest.mock import patch
 
 
 @pytest.fixture(params=["alphabot.agent_executor", "riskguard.agent_executor"])
