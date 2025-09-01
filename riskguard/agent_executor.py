@@ -58,12 +58,12 @@ class RiskGuardAgentExecutor(AgentExecutor):
             )
 
             # Session management remains the same
-            session: Session | None = (
-                await self._adk_runner.session_service.get_session(
-                    app_name=self._adk_runner.app_name,
-                    user_id="a2a_user",
-                    session_id=context.context_id,
-                )
+            session: (
+                Session | None
+            ) = await self._adk_runner.session_service.get_session(
+                app_name=self._adk_runner.app_name,
+                user_id="a2a_user",
+                session_id=context.context_id,
             )
             if session is None:
                 session = await self._adk_runner.session_service.create_session(

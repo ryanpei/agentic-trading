@@ -1,5 +1,3 @@
-import json
-
 import pytest
 import asyncio
 
@@ -7,7 +5,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.genai import types as genai_types
 
 from riskguard.agent import RiskGuardAgent
-from common.models import RiskCheckPayload, TradeProposal, PortfolioState
+from common.models import RiskCheckPayload
 
 
 @pytest.fixture

@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import DataPart, Message, Part, Role
 from alphabot.agent_executor import AlphaBotAgentExecutor
-from tests.conftest import adk_mock_alphabot_generator
 
 
 @pytest.fixture
@@ -42,7 +41,10 @@ def mock_event_queue():
 
 @pytest.mark.asyncio
 async def test_execute_success_buy_decision(
-    alphabot_message_factory, mock_runner_factory, mock_event_queue, adk_mock_alphabot_generator
+    alphabot_message_factory,
+    mock_runner_factory,
+    mock_event_queue,
+    adk_mock_alphabot_generator,
 ):
     mock_runner_instance = mock_runner_factory("alphabot.agent_executor")
 
@@ -57,8 +59,15 @@ async def test_execute_success_buy_decision(
 
     # Act
     executor = AlphaBotAgentExecutor()
-    executor._adk_runner = mock_runner_instance # Inject the mock runner
-    await executor.execute(context=MagicMock(message=request_message, context_id="test-context-456", task_id="test-task-123"), event_queue=mock_event_queue)
+    executor._adk_runner = mock_runner_instance  # Inject the mock runner
+    await executor.execute(
+        context=MagicMock(
+            message=request_message,
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=mock_event_queue,
+    )
 
     # Assert
     assert mock_runner_instance.run_async.call_count == 1
@@ -97,8 +106,15 @@ async def test_execute_missing_market_data(mock_runner_factory, mock_event_queue
 
     # Act
     executor = AlphaBotAgentExecutor()
-    executor._adk_runner = mock_runner_instance # Inject the mock runner
-    await executor.execute(context=MagicMock(message=request_message, context_id="test-context-456", task_id="test-task-123"), event_queue=mock_event_queue)
+    executor._adk_runner = mock_runner_instance  # Inject the mock runner
+    await executor.execute(
+        context=MagicMock(
+            message=request_message,
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=mock_event_queue,
+    )
 
     # Assert
     mock_event_queue.enqueue_event.assert_called_once()
@@ -109,13 +125,19 @@ async def test_execute_missing_market_data(mock_runner_factory, mock_event_queue
     assert enqueued_message.task_id == "test-task-123"
     assert len(enqueued_message.parts) == 1
     assert isinstance(enqueued_message.parts[0].root, DataPart)
-    assert "Invalid input: Missing market_data or portfolio_state" in enqueued_message.parts[0].root.data["error"]
+    assert (
+        "Invalid input: Missing market_data or portfolio_state"
+        in enqueued_message.parts[0].root.data["error"]
+    )
     mock_event_queue.close.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_execute_adk_runner_exception(
-    alphabot_message_factory, mock_runner_factory, mock_event_queue, adk_mock_alphabot_generator
+    alphabot_message_factory,
+    mock_runner_factory,
+    mock_event_queue,
+    adk_mock_alphabot_generator,
 ):
     mock_runner_instance = mock_runner_factory("alphabot.agent_executor")
 
@@ -127,8 +149,15 @@ async def test_execute_adk_runner_exception(
 
     # Act
     executor = AlphaBotAgentExecutor()
-    executor._adk_runner = mock_runner_instance # Inject the mock runner
-    await executor.execute(context=MagicMock(message=request_message, context_id="test-context-456", task_id="test-task-123"), event_queue=mock_event_queue)
+    executor._adk_runner = mock_runner_instance  # Inject the mock runner
+    await executor.execute(
+        context=MagicMock(
+            message=request_message,
+            context_id="test-context-456",
+            task_id="test-task-123",
+        ),
+        event_queue=mock_event_queue,
+    )
 
     # Assert
     mock_event_queue.enqueue_event.assert_called_once()
@@ -145,7 +174,10 @@ async def test_execute_adk_runner_exception(
 
 @pytest.mark.asyncio
 async def test_execute_handles_adk_runner_exception(
-    alphabot_message_factory, mock_runner_factory, mock_event_queue, adk_mock_alphabot_generator
+    alphabot_message_factory,
+    mock_runner_factory,
+    mock_event_queue,
+    adk_mock_alphabot_generator,
 ):
     """
     Tests that if the ADK runner fails, the executor enqueues an error message
@@ -157,7 +189,9 @@ async def test_execute_handles_adk_runner_exception(
     mock_runner.run_async.side_effect = Exception("ADK agent failed!")
 
     request_message = alphabot_message_factory()
-    context = MagicMock(message=request_message, context_id="test-context-456", task_id="test-task-123")
+    context = MagicMock(
+        message=request_message, context_id="test-context-456", task_id="test-task-123"
+    )
 
     # Act
     executor = AlphaBotAgentExecutor()
@@ -168,16 +202,16 @@ async def test_execute_handles_adk_runner_exception(
     # Assert
     # 1. An event was enqueued
     mock_event_queue.enqueue_event.assert_called_once()
-    
+
     # 2. The enqueued event is a Message containing error details
     enqueued_message = mock_event_queue.enqueue_event.call_args[0][0]
     assert isinstance(enqueued_message, Message)
-    
+
     # 3. The message part contains the error
     error_part = enqueued_message.parts[0].root
     assert isinstance(error_part, DataPart)
     assert error_part.data["error"] is not None
     assert "ADK Agent error: ADK agent failed!" in error_part.data["error"]
-    
+
     # 4. The queue was closed (critical for preventing hangs)
     mock_event_queue.close.assert_called_once()

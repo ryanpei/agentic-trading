@@ -9,9 +9,6 @@ from google.adk.agents import BaseAgent  # Import BaseAgent for type hinting
 from google.adk.events import Event, EventActions
 from google.genai import types as genai_types
 
-from a2a.server.agent_execution import RequestContext
-from a2a.server.events import EventQueue
-
 
 @pytest_asyncio.fixture
 async def adk_session() -> Session:
@@ -85,8 +82,7 @@ def adk_mock_alphabot_generator():
     async def _generator(final_state_delta, final_reason):
         # Yield an event with the state delta
         yield Event(
-            author="test_author",
-            actions=EventActions(state_delta=final_state_delta)
+            author="test_author", actions=EventActions(state_delta=final_state_delta)
         )
         # Yield a final event with the reason text
         yield Event(

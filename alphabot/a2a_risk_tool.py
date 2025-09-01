@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import uuid
@@ -135,9 +134,7 @@ class A2ARiskCheckTool(BaseTool):
             ),
         )
 
-    async def run_async(
-        self, **kwargs: Any
-    ) -> AsyncGenerator[Event, None]:
+    async def run_async(self, **kwargs: Any) -> AsyncGenerator[Event, None]:
         """Makes the actual A2A HTTP call."""
         tool_context: ToolContext = kwargs["tool_context"]
         args: Dict[str, Any] = kwargs["args"]
@@ -256,7 +253,9 @@ class A2ARiskCheckTool(BaseTool):
                 logger.error(
                     f"[{self.name} Tool ({invocation_id_short})] Unexpected A2A response structure. Root type: {type(root_response_part)}."
                 )
-                final_result_dict["reason"] = "A2A Error: Unexpected response structure."
+                final_result_dict["reason"] = (
+                    "A2A Error: Unexpected response structure."
+                )
 
         except A2AClientHTTPError as e:
             logger.error(
@@ -302,4 +301,3 @@ class A2ARiskCheckTool(BaseTool):
             ),
             turn_complete=True,  # This tool completes its action in one go
         )
-

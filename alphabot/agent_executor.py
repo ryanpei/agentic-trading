@@ -5,7 +5,7 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import DataPart, Part
-from a2a.utils.message import new_agent_parts_message # New import
+from a2a.utils.message import new_agent_parts_message  # New import
 from common.config import (
     DEFAULT_ALPHABOT_LONG_SMA,
     DEFAULT_ALPHABOT_SHORT_SMA,
@@ -91,7 +91,9 @@ class AlphaBotAgentExecutor(AgentExecutor):
             long_sma = agent_params.get("long_sma", DEFAULT_ALPHABOT_LONG_SMA)
             trade_qty = agent_params.get("trade_qty", DEFAULT_ALPHABOT_TRADE_QTY)
             riskguard_url = agent_params.get("riskguard_url", DEFAULT_RISKGUARD_URL)
-            max_pos_size = agent_params.get("max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE)
+            max_pos_size = agent_params.get(
+                "max_pos_size", DEFAULT_RISKGUARD_MAX_POS_SIZE
+            )
             max_concentration = agent_params.get(
                 "max_concentration", DEFAULT_RISKGUARD_MAX_CONCENTRATION
             )
@@ -109,7 +111,9 @@ class AlphaBotAgentExecutor(AgentExecutor):
                 "max_pos_size": max_pos_size,
                 "max_concentration": max_concentration,
             }
-            agent_input_dict = {k: v for k, v in agent_input_dict.items() if v is not None}
+            agent_input_dict = {
+                k: v for k, v in agent_input_dict.items() if v is not None
+            }
             agent_input_json = json.dumps(agent_input_dict)
             adk_content = genai_types.Content(
                 parts=[genai_types.Part(text=agent_input_json)]
@@ -126,12 +130,10 @@ class AlphaBotAgentExecutor(AgentExecutor):
                 session_id_for_adk
             ):  # Only proceed if session_id_for_adk is not None or empty
                 try:
-                    session = (
-                        await self._adk_runner.session_service.get_session(  # Added await
-                            app_name=self._adk_runner.app_name,
-                            user_id="a2a_user",
-                            session_id=session_id_for_adk,
-                        )
+                    session = await self._adk_runner.session_service.get_session(  # Added await
+                        app_name=self._adk_runner.app_name,
+                        user_id="a2a_user",
+                        session_id=session_id_for_adk,
                     )
                 except Exception as e_get:
                     logger.exception(
@@ -239,7 +241,10 @@ class AlphaBotAgentExecutor(AgentExecutor):
                             "reason": final_reason_text,
                         }
                     else:  # No trade decision in state_delta, use reason text as generic message
-                        final_result_dict = {"status": "Info", "message": final_reason_text}
+                        final_result_dict = {
+                            "status": "Info",
+                            "message": final_reason_text,
+                        }
                 elif (
                     final_reason_text != "Reason not provided."
                 ):  # Use reason text if no state_delta but reason exists
@@ -263,11 +268,7 @@ class AlphaBotAgentExecutor(AgentExecutor):
                 )
                 error_message = new_agent_parts_message(
                     parts=[
-                        Part(
-                            root=DataPart(
-                                data={"error": f"ADK Agent error: {e}"}
-                            )
-                        )
+                        Part(root=DataPart(data={"error": f"ADK Agent error: {e}"}))
                     ],
                     context_id=context.context_id,
                     task_id=context.task_id,

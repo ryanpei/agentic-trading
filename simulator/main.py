@@ -360,7 +360,9 @@ async def _call_alphabot_a2a(
         )
     )
     # The portfolio data should be the top-level object in its part for the executor to parse correctly.
-    portfolio_state_part = Part(root=A2ADataPart(data=portfolio_model.model_dump())) # FIXED
+    portfolio_state_part = Part(
+        root=A2ADataPart(data=portfolio_model.model_dump())
+    )  # FIXED
 
     # 3. Define the agent parameters to be sent in the message metadata.
     agent_params_metadata = {

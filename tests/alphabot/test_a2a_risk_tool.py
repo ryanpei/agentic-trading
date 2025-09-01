@@ -60,7 +60,9 @@ def create_success_response(result_data: dict) -> SendMessageSuccessResponse:
 
 
 def _verify_a2a_call(
-    mock_a2a_client: MagicMock, expected_trade_proposal: dict, expected_portfolio_state: dict
+    mock_a2a_client: MagicMock,
+    expected_trade_proposal: dict,
+    expected_portfolio_state: dict,
 ):
     """Helper function to verify the payload sent to the A2AClient."""
     mock_a2a_client.send_message.assert_awaited_once()
@@ -100,7 +102,10 @@ async def test_run_async_approved(
 
         # Act
         events = [
-            event async for event in risk_check_tool.run_async(args=args, tool_context=tool_context)
+            event
+            async for event in risk_check_tool.run_async(
+                args=args, tool_context=tool_context
+            )
         ]
 
         # Assert
@@ -110,9 +115,7 @@ async def test_run_async_approved(
         assert response_data == expected_result
 
         mock_client_constructor.assert_called_once()
-        _verify_a2a_call(
-            mock_a2a_client, base_trade_proposal, base_portfolio_state
-        )
+        _verify_a2a_call(mock_a2a_client, base_trade_proposal, base_portfolio_state)
 
 
 @pytest.mark.asyncio
@@ -141,7 +144,10 @@ async def test_run_async_rejected(
 
         # Act
         events = [
-            event async for event in risk_check_tool.run_async(args=args, tool_context=tool_context)
+            event
+            async for event in risk_check_tool.run_async(
+                args=args, tool_context=tool_context
+            )
         ]
 
         # Assert
@@ -151,6 +157,4 @@ async def test_run_async_rejected(
         assert response_data == expected_result
 
         mock_client_constructor.assert_called_once()
-        _verify_a2a_call(
-            mock_a2a_client, base_trade_proposal, base_portfolio_state
-        )
+        _verify_a2a_call(mock_a2a_client, base_trade_proposal, base_portfolio_state)

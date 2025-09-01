@@ -6,7 +6,7 @@ import pytest
 
 # ADK Imports
 from google.adk.agents.invocation_context import InvocationContext
-from google.adk.events import Event, EventActions
+from google.adk.events import Event
 from google.genai import types as genai_types
 
 from alphabot.agent import A2ARiskCheckTool, AlphaBotAgent, PortfolioStateInput

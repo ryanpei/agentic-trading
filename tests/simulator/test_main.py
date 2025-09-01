@@ -51,7 +51,6 @@ async def test_call_alphabot_a2a_success():
         DataPart,
         Part,
         Role,
-        TextPart,
     )
     from simulator.main import _call_alphabot_a2a
     from simulator.portfolio import PortfolioState
@@ -60,7 +59,12 @@ async def test_call_alphabot_a2a_success():
     mock_logger = MagicMock()
 
     # Mock the A2AClient.send_message to return a successful Message
-    expected_trade_proposal = {"action": "BUY", "quantity": 10, "price": 100.0, "ticker": "TEST"}
+    expected_trade_proposal = {
+        "action": "BUY",
+        "quantity": 10,
+        "price": 100.0,
+        "ticker": "TEST",
+    }
     expected_reason = "Test approved reason."
     mock_message_data = {
         "approved": True,
@@ -72,10 +76,12 @@ async def test_call_alphabot_a2a_success():
         context_id="mock_context_id",
         task_id="mock_task_id",
         role=Role.agent,
-        parts=[Part(root=DataPart(data=mock_message_data))]
+        parts=[Part(root=DataPart(data=mock_message_data))],
     )
     mock_send_message_success_response = SendMessageSuccessResponse(result=mock_message)
-    mock_client.send_message.return_value = SendMessageResponse(root=mock_send_message_success_response)
+    mock_client.send_message.return_value = SendMessageResponse(
+        root=mock_send_message_success_response
+    )
 
     # Prepare input for the function
     session_id = "test-session-123"
@@ -84,9 +90,12 @@ async def test_call_alphabot_a2a_success():
     historical_prices = [90.0, 95.0]
     portfolio = PortfolioState(cash=10000.0, shares=0, total_value=10000.0)
     params = {
-        "alphabot_short_sma": 10, "alphabot_long_sma": 20, "alphabot_trade_qty": 10,
-        "riskguard_url": "http://localhost:8001", "riskguard_max_pos_size": 1000,
-        "riskguard_max_concentration": 0.5
+        "alphabot_short_sma": 10,
+        "alphabot_long_sma": 20,
+        "alphabot_trade_qty": 10,
+        "riskguard_url": "http://localhost:8001",
+        "riskguard_max_pos_size": 1000,
+        "riskguard_max_concentration": 0.5,
     }
 
     # Call the function
@@ -117,7 +126,6 @@ async def test_call_alphabot_a2a_invalid_message_format():
         SendMessageResponse,
         SendMessageSuccessResponse,
         Message,
-        DataPart,
         Part,
         Role,
         TextPart,
@@ -134,10 +142,12 @@ async def test_call_alphabot_a2a_invalid_message_format():
         context_id="mock_context_id",
         task_id="mock_task_id",
         role=Role.agent,
-        parts=[Part(root=TextPart(text="Invalid part, should be DataPart"))]
+        parts=[Part(root=TextPart(text="Invalid part, should be DataPart"))],
     )
     mock_send_message_success_response = SendMessageSuccessResponse(result=mock_message)
-    mock_client.send_message.return_value = SendMessageResponse(root=mock_send_message_success_response)
+    mock_client.send_message.return_value = SendMessageResponse(
+        root=mock_send_message_success_response
+    )
 
     session_id = "test-session-123"
     day = 1
@@ -145,9 +155,12 @@ async def test_call_alphabot_a2a_invalid_message_format():
     historical_prices = [90.0, 95.0]
     portfolio = PortfolioState(cash=10000.0, shares=0, total_value=10000.0)
     params = {
-        "alphabot_short_sma": 10, "alphabot_long_sma": 20, "alphabot_trade_qty": 10,
-        "riskguard_url": "http://localhost:8001", "riskguard_max_pos_size": 1000,
-        "riskguard_max_concentration": 0.5
+        "alphabot_short_sma": 10,
+        "alphabot_long_sma": 20,
+        "alphabot_trade_qty": 10,
+        "riskguard_url": "http://localhost:8001",
+        "riskguard_max_pos_size": 1000,
+        "riskguard_max_concentration": 0.5,
     }
 
     outcome = await _call_alphabot_a2a(
@@ -175,10 +188,7 @@ async def test_call_alphabot_a2a_unexpected_response_type():
         SendMessageResponse,
         SendMessageSuccessResponse,
         Message,
-        DataPart,
-        Part,
         Role,
-        TextPart,
     )
     from simulator.main import _call_alphabot_a2a
     from simulator.portfolio import PortfolioState
@@ -198,7 +208,9 @@ async def test_call_alphabot_a2a_unexpected_response_type():
     )
     # Overwrite the result with a mock to trigger the error condition being tested
     mock_send_message_success_response.result = MagicMock(spec=object)
-    mock_client.send_message.return_value = SendMessageResponse(root=mock_send_message_success_response)
+    mock_client.send_message.return_value = SendMessageResponse(
+        root=mock_send_message_success_response
+    )
 
     session_id = "test-session-123"
     day = 1
@@ -206,9 +218,12 @@ async def test_call_alphabot_a2a_unexpected_response_type():
     historical_prices = [90.0, 95.0]
     portfolio = PortfolioState(cash=10000.0, shares=0, total_value=10000.0)
     params = {
-        "alphabot_short_sma": 10, "alphabot_long_sma": 20, "alphabot_trade_qty": 10,
-        "riskguard_url": "http://localhost:8001", "riskguard_max_pos_size": 1000,
-        "riskguard_max_concentration": 0.5
+        "alphabot_short_sma": 10,
+        "alphabot_long_sma": 20,
+        "alphabot_trade_qty": 10,
+        "riskguard_url": "http://localhost:8001",
+        "riskguard_max_pos_size": 1000,
+        "riskguard_max_concentration": 0.5,
     }
 
     outcome = await _call_alphabot_a2a(
