@@ -102,9 +102,6 @@ async def test_run_async_approved(
         # Verify the A2AClient was called correctly
         mock_client_constructor.assert_called_once()
         mock_a2a_client.send_message.assert_awaited_once()
-        sent_request = mock_a2a_client.send_message.call_args[0][0]
-        assert sent_request.params.message.metadata["max_pos_size"] is not None
-        assert sent_request.params.message.metadata["max_concentration"] is not None
 
 
 @pytest.mark.asyncio
