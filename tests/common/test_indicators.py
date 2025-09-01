@@ -20,3 +20,12 @@ def test_calculate_sma_empty_list():
     prices = []
     result = calculate_sma(prices, 3)
     assert result is None
+
+
+def test_calculate_sma_zero_period():
+    """Test SMA calculation with zero period to trigger division by zero."""
+    prices = [1.0, 2.0, 3.0]
+    # This should raise ZeroDivisionError with current implementation
+    result = calculate_sma(prices, 0)
+    # After fix, it should return None
+    assert result is None

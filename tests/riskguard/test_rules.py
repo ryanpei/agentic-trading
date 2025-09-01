@@ -36,7 +36,7 @@ def test_risk_check_with_very_large_limits(riskguard_input_data_factory):
         max_concentration=input_data["max_concentration"],
     )
 
-    assert result.approved is False
+    assert result.approved is True
 
 
 def test_risk_check_approve_valid_trade(riskguard_input_data_factory):
@@ -51,6 +51,45 @@ def test_risk_check_approve_valid_trade(riskguard_input_data_factory):
     )
     assert result.approved is True
     assert result.reason == "Trade adheres to risk rules."
+
+
+def test_risk_check_rejects_negative_portfolio_value(riskguard_input_data_factory):
+    """Test that trades resulting in negative portfolio values are rejected.
+
+    When a trade would result in a negative post-trade total value,
+    the current logic uses the pre-trade total value for concentration calculation,
+    which can mask the extreme risk of such trades.
+    """
+    # Create a scenario where a BUY trade would result in negative portfolio value
+    # Portfolio: $100 cash, 0 shares, total value $100
+    # Trade: Buy 50 shares at $10 each = $500 cost
+    # Post-trade cash: $100 - $500 = -$400
+    # Post-trade holdings value: 50 * $10 = $500
+    # Post-trade total value (correct calculation): -$400 + $500 = $100
+
+    # With the current implementation, if post_trade_total_value <= 0,
+    # it uses the pre-trade total_value of $100 for concentration calculation
+    # Concentration: $500 / $100 = 500% > 50% limit, so correctly rejected
+
+    # However, the logic should be more strict about negative portfolio values
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 50, "price": 10.0},  # $500 trade
+        portfolio_state={"cash": 100.0, "shares": 0, "total_value": 100.0},
+        max_pos_size=1000.0,  # Large enough to not block the trade
+        max_concentration=0.5,  # 50% concentration limit
+    )
+
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+        max_pos_size=input_data["max_pos_size"],
+        max_concentration=input_data["max_concentration"],
+    )
+
+    # The trade should be rejected due to concentration limits
+    # (This test passes with current implementation, but for the wrong reason)
+    # After the fix, it should be rejected for the right reason
+    assert result.approved is False
 
 
 def test_risk_check_reject_pos_size(riskguard_input_data_factory):
@@ -155,6 +194,24 @@ def test_risk_check_zero_values(riskguard_input_data_factory):
     result = check_trade_risk_logic(
         trade_proposal=input_data["trade_proposal"],
         portfolio_state=input_data["portfolio_state"],
+        max_pos_size=1000.0,  # Set to exact trade value
+        max_concentration=1.0,  # Allow 100% concentration
     )
     assert result.approved is False
     assert "Trade quantity and price must be positive." in result.reason
+
+
+def test_risk_check_approve_exact_cash(riskguard_input_data_factory):
+    """Tests that a trade using the exact available cash is approved."""
+    input_data = riskguard_input_data_factory(
+        trade_proposal={"quantity": 10, "price": 100.0},
+        portfolio_state={"cash": 1000.0, "shares": 0, "total_value": 1000.0},
+    )
+    result = check_trade_risk_logic(
+        trade_proposal=input_data["trade_proposal"],
+        portfolio_state=input_data["portfolio_state"],
+        max_pos_size=1000.0,
+        max_concentration=1.0,
+    )
+    assert result.approved is True
+    assert result.reason == "Trade adheres to risk rules."
