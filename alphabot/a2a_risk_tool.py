@@ -50,7 +50,10 @@ class A2ARiskCheckTool(BaseTool):
 
     def __init__(self, **kwargs):
         # Pop custom arguments for this class before calling super()
-        self._httpx_client = kwargs.pop("httpx_client", httpx.AsyncClient())
+        # Configure httpx.AsyncClient with the timeout
+        self._httpx_client = kwargs.pop(
+            "httpx_client", httpx.AsyncClient(timeout=RISKGUARD_A2A_TIMEOUT_SECONDS)
+        )
         risk_guard_service_url = os.environ.get(
             "RISKGUARD_SERVICE_URL", DEFAULT_RISKGUARD_URL
         )
