@@ -38,7 +38,7 @@ def main(host: str, port: int):
             version="1.0.0",
             capabilities=AgentCapabilities(
                 streaming=False,  # AlphaBotTaskManager doesn't support streaming
-                pushNotifications=False,  # Not implemented
+                push_notifications=False,  # Not implemented
             ),
             skills=[
                 AgentSkill(
@@ -51,10 +51,8 @@ def main(host: str, port: int):
                     tags=[],
                 )
             ],
-            defaultInputModes=[
-                "data"
-            ],  # Expects market/portfolio state as structured data
-            defaultOutputModes=["data"],  # Returns trade decision as structured data
+            default_input_modes=["data"],
+            default_output_modes=["data"],
         )
     except Exception:
         logger.exception("Error creating AgentCard")

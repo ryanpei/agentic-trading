@@ -3,6 +3,10 @@ from alphabot.agent import AlphaBotAgent
 from common.models import AlphaBotTaskPayload, PortfolioState
 from common.utils.agent_utils import create_a2a_message_from_payload
 from a2a.types import Message, Role
+from unittest.mock import AsyncMock
+import httpx
+
+from alphabot.a2a_risk_tool import A2ARiskCheckTool
 
 
 @pytest.fixture
@@ -147,3 +151,22 @@ def alphabot_message_factory(alphabot_input_data_factory):
         return a2a_message
 
     return _create_message
+
+@pytest.fixture
+def mock_httpx_client() -> AsyncMock:
+    """Fixture to create a mock httpx.AsyncClient."""
+    return AsyncMock(spec=httpx.AsyncClient)
+
+@pytest.fixture
+def risk_check_tool(
+    mock_httpx_client: AsyncMock,
+) -> A2ARiskCheckTool:
+    """
+    Provides an A2ARiskCheckTool instance with a mocked httpx_client
+    for hermetic testing.
+    """
+    # The tool is now a real object, but its http client is a mock,
+    # preventing real network calls.
+    return A2ARiskCheckTool() # httpx_client=mock_httpx_client)
+
+

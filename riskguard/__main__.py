@@ -37,7 +37,7 @@ def main(host: str, port: int):
             version="1.1.0",
             capabilities=AgentCapabilities(
                 streaming=False,
-                pushNotifications=False,
+                push_notifications=False,
             ),
             skills=[
                 AgentSkill(
@@ -48,8 +48,8 @@ def main(host: str, port: int):
                     tags=[],
                 )
             ],
-            defaultInputModes=["data"],
-            defaultOutputModes=["data"],
+            default_input_modes=["data"],
+            default_output_modes=["data"],
         )
     except AttributeError as e:
         logger.error(
