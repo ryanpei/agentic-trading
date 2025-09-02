@@ -3,14 +3,18 @@ import os
 from typing import Any, Dict
 
 import httpx
-from a2a.client import A2AClient, A2AClientHTTPError, A2AClientJSONError
+from a2a.client import (
+    A2ACardResolver,
+    A2AClientHTTPError,
+    A2AClientJSONError,
+    ClientConfig,
+    ClientFactory,
+)
+from a2a.client.errors import A2AClientInvalidStateError
 from a2a.types import (
     DataPart,
-    JSONRPCErrorResponse,
     Message,
     Role,
-    SendMessageResponse,
-    SendMessageSuccessResponse,
 )
 from common.config import (
     DEFAULT_RISKGUARD_MAX_CONCENTRATION,
@@ -31,6 +35,8 @@ from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
+RISKGUARD_A2A_TIMEOUT_SECONDS = 10
+
 
 class A2ARiskCheckTool(BaseTool):
     """
@@ -43,13 +49,18 @@ class A2ARiskCheckTool(BaseTool):
     _httpx_client: httpx.AsyncClient
 
     def __init__(self, **kwargs):
-        super().__init__(name=self.name, description=self.description, **kwargs)
+        # Pop custom arguments for this class before calling super()
+        # Configure httpx.AsyncClient with the timeout
+        self._httpx_client = kwargs.pop(
+            "httpx_client", httpx.AsyncClient(timeout=RISKGUARD_A2A_TIMEOUT_SECONDS)
+        )
         risk_guard_service_url = os.environ.get(
             "RISKGUARD_SERVICE_URL", DEFAULT_RISKGUARD_URL
-        ).rstrip("/")
-        self.risk_guard_url = risk_guard_service_url
-        self._httpx_client = httpx.AsyncClient()
-        logger.info(f"A2ARiskCheckTool initialized to target: {self.risk_guard_url}")
+        )
+        self.risk_guard_url = kwargs.pop("risk_guard_url", risk_guard_service_url)
+
+        # Now, kwargs only contains arguments meant for the parent class
+        super().__init__(name=self.name, description=self.description, **kwargs)
 
     async def close(self):
         """Close the httpx.AsyncClient when the tool is no longer needed."""
@@ -208,50 +219,49 @@ class A2ARiskCheckTool(BaseTool):
         # 2. Use the new helper to create the A2A Request
         a2a_request = create_a2a_request_from_payload(risk_payload, role=Role.user)
 
-        a2a_sdk_client = A2AClient(
-            httpx_client=self._httpx_client, url=risk_guard_target_url
+        # Corrected approach based on SDK source
+        client_config = ClientConfig(httpx_client=self._httpx_client)
+        client_factory = ClientFactory(config=client_config)
+        card_resolver = A2ACardResolver(
+            httpx_client=self._httpx_client, base_url=risk_guard_target_url
         )
+
         try:
-            response: SendMessageResponse = await a2a_sdk_client.send_message(
-                a2a_request, http_kwargs={"timeout": 10}
-            )
-            logger.debug(
-                f"[{self.name} Tool ({invocation_id_short})] Received A2A response: {response.model_dump_json(exclude_none=True)}"
-            )
-            root_response_part = response.root
+            agent_card = await card_resolver.get_agent_card()
+            a2a_sdk_client = client_factory.create(agent_card)
 
-            if isinstance(root_response_part, JSONRPCErrorResponse):
-                actual_error = root_response_part.error
-                logger.warning(
-                    f"[{self.name} Tool ({invocation_id_short})] A2A call returned error: {actual_error.code} - {actual_error.message}"
-                )
-                final_result_dict["reason"] = (
-                    f"A2A Error {actual_error.code}: {actual_error.message}"
-                )
-            elif isinstance(root_response_part, SendMessageSuccessResponse):
-                response_message = root_response_part.result
-                if (
-                    isinstance(response_message, Message)
-                    and response_message.parts
-                    and isinstance(response_message.parts[0].root, DataPart)
-                ):
-                    part_data = response_message.parts[0].root.data
-                    risk_result_model = RiskCheckResult.model_validate(part_data)
-                    final_result_dict = risk_result_model.model_dump()
-                else:
-                    # Handle error or unexpected response
-                    final_result_dict = {
-                        "approved": False,
-                        "reason": "Malformed response from RiskGuard",
-                    }
-            else:
-                logger.error(
-                    f"[{self.name} Tool ({invocation_id_short})] Unexpected A2A response structure. Root type: {type(root_response_part)}."
-                )
-                final_result_dict["reason"] = (
-                    "A2A Error: Unexpected response structure."
-                )
+            # The new client uses a streaming response. We need to iterate.
+            # The `send_message` method expects the `Message` object directly.
+            async for event in a2a_sdk_client.send_message(a2a_request.params.message):
+                if isinstance(event, Message):
+                    if event.parts and isinstance(event.parts[0].root, DataPart):
+                        part_data = event.parts[0].root.data
+                        try:
+                            risk_result_model = RiskCheckResult.model_validate(
+                                part_data
+                            )
+                            final_result_dict = risk_result_model.model_dump()
+                        except ValidationError:
+                            final_result_dict["reason"] = (
+                                "Malformed response from RiskGuard"
+                            )
+                    else:
+                        final_result_dict["reason"] = (
+                            "Malformed response from RiskGuard"
+                        )
+                    break  # Assuming we only need the first message
+                elif isinstance(event, tuple):  # It's a ClientEvent (Task, Update)
+                    task, _ = event
+                    logger.debug(
+                        f"Received task update for {task.id}: {task.status.state}"
+                    )
 
+        except A2AClientInvalidStateError as e:
+            logger.error(
+                f"[{self.name} Tool ({invocation_id_short})] A2A SDK Invalid State Error: {e}",
+                exc_info=True,
+            )
+            final_result_dict["reason"] = f"A2A SDK Error: {e}"
         except A2AClientHTTPError as e:
             logger.error(
                 f"[{self.name} Tool ({invocation_id_short})] A2A SDK HTTP Error connecting to RiskGuard ({risk_guard_target_url}): {e.status_code} - {e.message}"

@@ -23,17 +23,17 @@ import plotly.graph_objects as go
 
 # A2A SDK Imports
 from a2a.client import (
-    A2AClient,
+    A2ACardResolver,
     A2AClientHTTPError,
     A2AClientJSONError,
+    ClientConfig,
+    ClientFactory,
 )
+from a2a.client.errors import A2AClientInvalidStateError
 from a2a.types import (
     DataPart,
-    JSONRPCErrorResponse,
-    SendMessageSuccessResponse,
     Message as A2AMessage,
     Role,
-    SendMessageResponse,
 )
 from common.config import (
     DEFAULT_SIMULATOR_PORT,
@@ -318,7 +318,8 @@ class UILogHandler(logging.Handler):
 
 
 async def _call_alphabot_a2a(
-    client: A2AClient,
+    client_factory: ClientFactory,
+    alphabot_url: str,
     session_id: str,
     day: int,
     current_price: float,
@@ -331,7 +332,8 @@ async def _call_alphabot_a2a(
     Prepares and sends a message to the AlphaBot A2A server for a given simulation day.
 
     Args:
-        client: The A2AClient instance for AlphaBot.
+        client_factory: The A2A ClientFactory instance.
+        alphabot_url: The base URL for the AlphaBot service.
         session_id: The simulation session ID (used as contextId).
         day: The current simulation day.
         current_price: The current market price.
@@ -371,71 +373,63 @@ async def _call_alphabot_a2a(
         "reason": None,
         "error": None,
     }
+
+    # The httpx_client is managed by the factory's config.
+    # We can access it for the resolver, but we must handle the case where it might be None.
+    httpx_client = client_factory._config.httpx_client
+    if not httpx_client:
+        raise ConnectionError("HTTPX client not configured in ClientFactory.")
+
+    card_resolver = A2ACardResolver(httpx_client=httpx_client, base_url=alphabot_url)
+
     try:
-        response: SendMessageResponse = await client.send_message(sdk_request)
-        root_response_part = response.root
+        agent_card = await card_resolver.get_agent_card()
+        a2a_sdk_client = client_factory.create(agent_card)
 
-        if isinstance(root_response_part, JSONRPCErrorResponse):
-            actual_error = root_response_part.error
-            sim_logger.error(
-                f"A2A Error from AlphaBot: {actual_error.code} - {actual_error.message}"
-            )
-            outcome["error"] = (
-                f"A2A Error: {actual_error.code} - {actual_error.message}"
-            )
-        elif isinstance(root_response_part, SendMessageSuccessResponse):
-            # We expect a Message, but the type hint for SendMessageSuccessResponse.result
-            # might still include Task for broader compatibility.
-            # Explicitly check and handle if it's not a Message.
-            result_message = root_response_part.result
-            if not isinstance(result_message, A2AMessage):
-                sim_logger.error(
-                    f"A2A Response Format Issue: Expected Message, but got {type(result_message)}"
-                )
-                outcome["error"] = "A2A Response Format Issue: Expected Message"
-                return outcome
+        # The new client returns a stream. We iterate and process the events.
+        async for event in a2a_sdk_client.send_message(sdk_request.params.message):
+            if isinstance(event, A2AMessage):
+                # This is the final response message
+                if event.parts and isinstance(event.parts[0].root, DataPart):
+                    part_data = event.parts[0].root.data
+                    outcome_model = TradeOutcome.model_validate(part_data)
 
-            # 4. Parse the response using the new TradeOutcome model
-            if result_message.parts and isinstance(
-                result_message.parts[0].root, DataPart
-            ):
-                part_data = result_message.parts[0].root.data
-                # The data part should contain the JSON representation of TradeOutcome
-                outcome_model = TradeOutcome.model_validate(part_data)
-
-                if outcome_model.status == TradeStatus.APPROVED:
-                    if outcome_model.trade_proposal:
-                        outcome["approved_trade"] = (
-                            outcome_model.trade_proposal.model_dump()
+                    if outcome_model.status == TradeStatus.APPROVED:
+                        if outcome_model.trade_proposal:
+                            outcome["approved_trade"] = (
+                                outcome_model.trade_proposal.model_dump()
+                            )
+                        sim_logger.info(
+                            f"    >>> Approved Trade: {outcome.get('approved_trade')} (Reason: {outcome_model.reason})"
                         )
-                    sim_logger.info(
-                        f"    >>> Approved Trade: {outcome.get('approved_trade')} (Reason: {outcome_model.reason})"
-                    )
-                elif outcome_model.status == TradeStatus.REJECTED:
-                    if outcome_model.trade_proposal:
-                        outcome["rejected_trade"] = (
-                            outcome_model.trade_proposal.model_dump()
+                    elif outcome_model.status == TradeStatus.REJECTED:
+                        if outcome_model.trade_proposal:
+                            outcome["rejected_trade"] = (
+                                outcome_model.trade_proposal.model_dump()
+                            )
+                        sim_logger.info(
+                            f"    >>> Rejected Trade: {outcome.get('rejected_trade')} (Reason: {outcome_model.reason})"
                         )
-                    sim_logger.info(
-                        f"    >>> Rejected Trade: {outcome.get('rejected_trade')} (Reason: {outcome_model.reason})"
+                    elif outcome_model.status == TradeStatus.NO_ACTION:
+                        sim_logger.info(
+                            f"  >> Received info message from AlphaBot: {outcome_model.reason}"
+                        )
+                    outcome["reason"] = outcome_model.reason
+                else:
+                    sim_logger.warning(
+                        "AlphaBot response lacked expected DataPart with TradeOutcome."
                     )
-                elif outcome_model.status == TradeStatus.NO_ACTION:
-                    sim_logger.info(
-                        f"  >> Received info message from AlphaBot: {outcome_model.reason}"
-                    )
-
-                outcome["reason"] = outcome_model.reason
-            else:
-                sim_logger.warning(
-                    "AlphaBot response lacked expected DataPart with TradeOutcome."
+                    outcome["error"] = "AlphaBot Response Format Issue or No Decision"
+                break  # We have the final message, so we can exit the loop.
+            elif isinstance(event, tuple):  # It's a ClientEvent (Task, Update)
+                task, _ = event
+                sim_logger.debug(
+                    f"Received task update for {task.id}: {task.status.state}"
                 )
-                outcome["error"] = "AlphaBot Response Format Issue or No Decision"
-        else:
-            sim_logger.error(
-                f"A2A response was not a SendMessageSuccessResponse or an error: {response.model_dump_json(exclude_none=True)}"
-            )
-            outcome["error"] = "Invalid A2A Response Type"
 
+    except A2AClientInvalidStateError as e:
+        sim_logger.error(f"A2A SDK Invalid State Error: {e}", exc_info=True)
+        outcome["error"] = f"A2A SDK Error: {e}"
     except A2AClientHTTPError as http_err:
         sim_logger.error(
             f"A2A HTTP Error to AlphaBot: {http_err.status_code} - {http_err.message}"
@@ -495,15 +489,9 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
 
         # The A2AClient needs an httpx.AsyncClient. Manage its lifecycle.
         async with httpx.AsyncClient() as http_client:
-            try:
-                a2a_client = A2AClient(httpx_client=http_client, url=alphabot_url)
-            except Exception as e:  # More specific httpx errors could be caught
-                sim_logger.error(
-                    f"Failed to initialize A2AClient for AlphaBot at {alphabot_url}: {e}"
-                )
-                raise ConnectionError(
-                    f"Could not connect or initialize A2A client for AlphaBot at {alphabot_url}"
-                ) from e
+            client_factory = ClientFactory(
+                config=ClientConfig(httpx_client=http_client)
+            )
 
             a2a_session_id = f"sim-session-{uuid.uuid4().hex[:8]}"
             sim_logger.info(f"Using A2A Session ID (contextId): {a2a_session_id}")
@@ -545,7 +533,8 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
                 a2a_outcome = await _call_alphabot_a2a(
-                    client=a2a_client,
+                    client_factory=client_factory,
+                    alphabot_url=alphabot_url,
                     session_id=a2a_session_id,
                     day=day,
                     current_price=current_price,
