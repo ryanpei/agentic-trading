@@ -13,11 +13,8 @@ from a2a.client import (
 from a2a.client.errors import A2AClientInvalidStateError
 from a2a.types import (
     DataPart,
-    JSONRPCErrorResponse,
     Message,
     Role,
-    SendMessageResponse,
-    SendMessageSuccessResponse,
 )
 from common.config import (
     DEFAULT_RISKGUARD_MAX_CONCENTRATION,
@@ -47,9 +44,7 @@ class A2ARiskCheckTool(BaseTool):
     """
 
     name: str = "a2a_risk_check"
-    description: str = (
-        "Sends a trade proposal to the RiskGuard service for validation and returns the approval status and reason."
-    )
+    description: str = "Sends a trade proposal to the RiskGuard service for validation and returns the approval status and reason."
     risk_guard_url: str
     _httpx_client: httpx.AsyncClient
 
@@ -308,4 +303,3 @@ class A2ARiskCheckTool(BaseTool):
             ),
             turn_complete=True,  # This tool completes its action in one go
         )
-

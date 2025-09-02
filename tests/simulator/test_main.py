@@ -6,7 +6,6 @@ import common.config as defaults
 from common.models import TradeProposal, TradeOutcome, TradeStatus
 from a2a.client import ClientFactory
 from a2a.types import (
-    AgentCard,
     DataPart,
     Message,
     Part,
@@ -52,7 +51,9 @@ def test_read_main():
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Skipping due to async generator mocking issues")
-async def test_call_alphabot_a2a_with_factory(mock_a2a_sdk_components, test_agent_card, mock_a2a_send_message_generator):
+async def test_call_alphabot_a2a_with_factory(
+    mock_a2a_sdk_components, test_agent_card, mock_a2a_send_message_generator
+):
     """Verify that _call_alphabot_a2a correctly uses the ClientFactory."""
     mock_logger = MagicMock()
     mock_factory_instance = mock_a2a_sdk_components["mock_factory_instance"]
@@ -82,6 +83,7 @@ async def test_call_alphabot_a2a_with_factory(mock_a2a_sdk_components, test_agen
     def mock_send_message_side_effect(*args, **kwargs):
         async def generator():
             yield mock_message
+
         return generator()
 
     mock_a2a_client.send_message.side_effect = mock_send_message_side_effect
@@ -155,8 +157,6 @@ async def test_call_alphabot_a2a_factory_raises_transport_error():
                 },
                 sim_logger=mock_logger,
             )
-
-
 
 
 def test_run_simulation_success(mock_a2a_call):

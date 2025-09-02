@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from alphabot.a2a_risk_tool import A2ARiskCheckTool
 from alphabot.agent import AlphaBotAgent
 from a2a.client import (
@@ -9,8 +9,6 @@ from a2a.client import (
 from a2a.client.errors import A2AClientError
 from a2a.types import (
     AgentCard,
-    AgentCapabilities,
-    AgentSkill,
     DataPart,
     Message,
     Part,
@@ -76,7 +74,12 @@ async def test_run_async_approved(
     """Test using shared fixtures for input data."""
     # Arrange
     args = {
-        "trade_proposal": {"action": "BUY", "quantity": 10, "price": 100.0, "ticker": "TEST"},
+        "trade_proposal": {
+            "action": "BUY",
+            "quantity": 10,
+            "price": 100.0,
+            "ticker": "TEST",
+        },
         "portfolio_state": {"cash": 10000.0, "shares": 50, "total_value": 15000.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }
@@ -121,7 +124,12 @@ async def test_run_async_rejected(
     """Test the tool's run_async method for a rejected trade."""
     # Arrange
     args = {
-        "trade_proposal": {"action": "SELL", "quantity": 20, "price": 100.0, "ticker": "TEST"},
+        "trade_proposal": {
+            "action": "SELL",
+            "quantity": 20,
+            "price": 100.0,
+            "ticker": "TEST",
+        },
         "portfolio_state": {"cash": 10000.0, "shares": 10, "total_value": 11000.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }
@@ -143,7 +151,7 @@ async def test_run_async_rejected(
 
     # Temporarily replace the verification function
     import tests.alphabot.test_a2a_risk_tool as test_module
-    original_verify = test_module._verify_a2a_payload
+
     test_module._verify_a2a_payload = skip_verification
 
     # Act
@@ -171,7 +179,12 @@ async def test_run_async_handles_malformed_message(
     """Tests that the tool gracefully handles a malformed A2A response."""
     # Arrange
     args = {
-        "trade_proposal": {"action": "BUY", "quantity": 5, "price": 100.0, "ticker": "TEST"},
+        "trade_proposal": {
+            "action": "BUY",
+            "quantity": 5,
+            "price": 100.0,
+            "ticker": "TEST",
+        },
         "portfolio_state": {"cash": 10000.0, "shares": 5, "total_value": 10500.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }
@@ -197,7 +210,7 @@ async def test_run_async_handles_malformed_message(
 
     # Temporarily replace the verification function
     import tests.alphabot.test_a2a_risk_tool as test_module
-    original_verify = test_module._verify_a2a_payload
+
     test_module._verify_a2a_payload = skip_verification
 
     # Act
@@ -226,21 +239,26 @@ async def test_run_async_a2a_client_timeout(
     """Tests that the tool handles an A2AClientTimeoutError."""
     # Arrange
     args = {
-        "trade_proposal": {"action": "BUY", "quantity": 10, "price": 100.0, "ticker": "TEST"},
+        "trade_proposal": {
+            "action": "BUY",
+            "quantity": 10,
+            "price": 100.0,
+            "ticker": "TEST",
+        },
         "portfolio_state": {"cash": 10000.0, "shares": 50, "total_value": 15000.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }
     mock_resolver_instance = mock_a2a_sdk_components["mock_resolver_instance"]
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
     mock_a2a_client = mock_a2a_sdk_components["mock_a2a_client"]
-    
+
     # Create an async iterator that raises the error on the first iteration
     async def mock_send_message_error_iterator(*args, **kwargs):
         raise A2AClientTimeoutError("Request timed out")
-        
+
     def mock_send_message_error(*args, **kwargs):
         return mock_send_message_error_iterator(*args, **kwargs)
-    
+
     # Replace the send_message method directly with our error function
     mock_a2a_client.send_message = mock_send_message_error
 
@@ -269,21 +287,26 @@ async def test_run_async_a2a_http_error(
     """Tests that the tool handles an A2AClientHTTPError."""
     # Arrange
     args = {
-        "trade_proposal": {"action": "BUY", "quantity": 10, "price": 100.0, "ticker": "TEST"},
+        "trade_proposal": {
+            "action": "BUY",
+            "quantity": 10,
+            "price": 100.0,
+            "ticker": "TEST",
+        },
         "portfolio_state": {"cash": 10000.0, "shares": 50, "total_value": 15000.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }
     mock_resolver_instance = mock_a2a_sdk_components["mock_resolver_instance"]
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
     mock_a2a_client = mock_a2a_sdk_components["mock_a2a_client"]
-    
+
     # Create an async iterator that raises the error on the first iteration
     async def mock_send_message_error_iterator(*args, **kwargs):
         raise A2AClientHTTPError(message="Service Unavailable", status_code=503)
-        
+
     def mock_send_message_error(*args, **kwargs):
         return mock_send_message_error_iterator(*args, **kwargs)
-    
+
     # Replace the send_message method directly with our error function
     mock_a2a_client.send_message = mock_send_message_error
 
@@ -326,7 +349,12 @@ async def test_run_async_transport_resolution_error(
 ):
     """Tests that the tool handles an A2ATransportResolutionError."""
     args = {
-        "trade_proposal": {"action": "BUY", "quantity": 10, "price": 100.0, "ticker": "TEST"},
+        "trade_proposal": {
+            "action": "BUY",
+            "quantity": 10,
+            "price": 100.0,
+            "ticker": "TEST",
+        },
         "portfolio_state": {"cash": 10000.0, "shares": 50, "total_value": 15000.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }

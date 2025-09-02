@@ -380,9 +380,7 @@ async def _call_alphabot_a2a(
     if not httpx_client:
         raise ConnectionError("HTTPX client not configured in ClientFactory.")
 
-    card_resolver = A2ACardResolver(
-        httpx_client=httpx_client, base_url=alphabot_url
-    )
+    card_resolver = A2ACardResolver(httpx_client=httpx_client, base_url=alphabot_url)
 
     try:
         agent_card = await card_resolver.get_agent_card()
@@ -425,7 +423,9 @@ async def _call_alphabot_a2a(
                 break  # We have the final message, so we can exit the loop.
             elif isinstance(event, tuple):  # It's a ClientEvent (Task, Update)
                 task, _ = event
-                sim_logger.debug(f"Received task update for {task.id}: {task.status.state}")
+                sim_logger.debug(
+                    f"Received task update for {task.id}: {task.status.state}"
+                )
 
     except A2AClientInvalidStateError as e:
         sim_logger.error(f"A2A SDK Invalid State Error: {e}", exc_info=True)
@@ -489,7 +489,9 @@ async def run_simulation_async(params: Dict[str, Any]) -> Dict[str, Any]:
 
         # The A2AClient needs an httpx.AsyncClient. Manage its lifecycle.
         async with httpx.AsyncClient() as http_client:
-            client_factory = ClientFactory(config=ClientConfig(httpx_client=http_client))
+            client_factory = ClientFactory(
+                config=ClientConfig(httpx_client=http_client)
+            )
 
             a2a_session_id = f"sim-session-{uuid.uuid4().hex[:8]}"
             sim_logger.info(f"Using A2A Session ID (contextId): {a2a_session_id}")

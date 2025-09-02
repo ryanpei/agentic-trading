@@ -152,10 +152,12 @@ def alphabot_message_factory(alphabot_input_data_factory):
 
     return _create_message
 
+
 @pytest.fixture
 def mock_httpx_client() -> AsyncMock:
     """Fixture to create a mock httpx.AsyncClient."""
     return AsyncMock(spec=httpx.AsyncClient)
+
 
 @pytest.fixture
 def risk_check_tool(
@@ -167,6 +169,4 @@ def risk_check_tool(
     """
     # The tool is now a real object, but its http client is a mock,
     # preventing real network calls.
-    return A2ARiskCheckTool() # httpx_client=mock_httpx_client)
-
-
+    return A2ARiskCheckTool()  # httpx_client=mock_httpx_client)
