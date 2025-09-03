@@ -374,8 +374,8 @@ async def _call_alphabot_a2a(
         "error": None,
     }
 
-    # The httpx_client is managed by the factory's config.
-    # We can access it for the resolver, but we must handle the case where it might be None.
+    # Access the httpx_client from the factory's config to create the A2ACardResolver.
+    # The ClientFactory doesn't provide a public method to access the httpx_client directly.
     httpx_client = client_factory._config.httpx_client
     if not httpx_client:
         raise ConnectionError("HTTPX client not configured in ClientFactory.")

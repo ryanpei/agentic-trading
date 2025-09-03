@@ -50,7 +50,6 @@ def test_read_main():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping due to async generator mocking issues")
 async def test_call_alphabot_a2a_with_factory(
     mock_a2a_sdk_components, test_agent_card, mock_a2a_send_message_generator
 ):
@@ -78,15 +77,11 @@ async def test_call_alphabot_a2a_with_factory(
         parts=[Part(root=DataPart(data=trade_outcome.model_dump(mode="json")))],
     )
 
-    # Configure the mock client's send_message to use a side_effect.
-    # The side_effect is now a REGULAR function that RETURNS an async generator.
-    def mock_send_message_side_effect(*args, **kwargs):
-        async def generator():
-            yield mock_message
+    # Configure the mock client's send_message to be an async generator function.
+    mock_send_message = mock_a2a_send_message_generator(mock_message)
 
-        return generator()
-
-    mock_a2a_client.send_message.side_effect = mock_send_message_side_effect
+    # Replace the send_message method directly with our async generator
+    mock_a2a_client.send_message = mock_send_message
 
     # Prepare input for the function
     params = {

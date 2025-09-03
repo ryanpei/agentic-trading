@@ -191,6 +191,32 @@ def mock_a2a_send_message_generator():
     return _create_mock_send_message
 
 
+def create_async_error_iterator(exception_class, *args, **kwargs):
+    """
+    Create an async iterator that raises an exception on the first call to __anext__.
+
+    Args:
+        exception_class: The exception class to raise
+        *args: Positional arguments to pass to the exception constructor
+        **kwargs: Keyword arguments to pass to the exception constructor
+
+    Returns:
+        An async iterator that raises the specified exception on first __anext__ call
+    """
+
+    class MockSendMessageErrorIterator:
+        def __init__(self, exception):
+            self.exception = exception
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise self.exception
+
+    return MockSendMessageErrorIterator(exception_class(*args, **kwargs))
+
+
 @pytest.fixture
 def mock_a2a_sdk_components():
     """
@@ -250,6 +276,7 @@ def mock_a2a_sdk_components():
             "mock_resolver_class": mock_resolver_class_main,
             "mock_factory_class": mock_factory_class_main,
             "mock_resolver_instance": mock_resolver_instance_main,
+            "mock_resolver_instance_risk_tool": mock_resolver_instance_risk_tool,
             "mock_factory_instance": mock_factory_instance_main,
             "mock_a2a_client": mock_a2a_client,
             "mock_agent_card": mock_agent_card,

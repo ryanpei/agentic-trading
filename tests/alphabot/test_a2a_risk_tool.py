@@ -6,7 +6,6 @@ from a2a.client import (
     A2AClientHTTPError,
     A2AClientTimeoutError,
 )
-from a2a.client.errors import A2AClientError
 from a2a.types import (
     AgentCard,
     DataPart,
@@ -19,6 +18,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.sessions import Session
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from common.models import RiskCheckResult
+from tests.conftest import create_async_error_iterator
 
 
 @pytest.fixture
@@ -91,8 +91,9 @@ async def test_run_async_approved(
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
 
     # Configure the mock client's send_message to be an async generator function.
-    async def mock_send_message(*args, **kwargs):
-        yield create_success_response_message(expected_result)
+    mock_send_message = mock_a2a_send_message_generator(
+        create_success_response_message(expected_result)
+    )
 
     # Replace the send_message method directly with our async generator
     mock_a2a_client.send_message = mock_send_message
@@ -139,8 +140,9 @@ async def test_run_async_rejected(
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
 
     # Configure the mock client's send_message to be an async generator function.
-    async def mock_send_message(*args, **kwargs):
-        yield create_success_response_message(expected_result)
+    mock_send_message = mock_a2a_send_message_generator(
+        create_success_response_message(expected_result)
+    )
 
     # Replace the send_message method directly with our async generator
     mock_a2a_client.send_message = mock_send_message
@@ -198,8 +200,7 @@ async def test_run_async_handles_malformed_message(
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
 
     # Configure the mock client's send_message to be an async generator function.
-    async def mock_send_message(*args, **kwargs):
-        yield malformed_message
+    mock_send_message = mock_a2a_send_message_generator(malformed_message)
 
     # Replace the send_message method directly with our async generator
     mock_a2a_client.send_message = mock_send_message
@@ -229,7 +230,6 @@ async def test_run_async_handles_malformed_message(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping due to async generator mocking issues")
 async def test_run_async_a2a_client_timeout(
     risk_check_tool: A2ARiskCheckTool,
     tool_context: ToolContext,
@@ -252,15 +252,10 @@ async def test_run_async_a2a_client_timeout(
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
     mock_a2a_client = mock_a2a_sdk_components["mock_a2a_client"]
 
-    # Create an async iterator that raises the error on the first iteration
-    async def mock_send_message_error_iterator(*args, **kwargs):
-        raise A2AClientTimeoutError("Request timed out")
-
-    def mock_send_message_error(*args, **kwargs):
-        return mock_send_message_error_iterator(*args, **kwargs)
-
-    # Replace the send_message method directly with our error function
-    mock_a2a_client.send_message = mock_send_message_error
+    # Replace the send_message method with our error iterator using the helper function
+    mock_a2a_client.send_message = lambda *args, **kwargs: create_async_error_iterator(
+        A2AClientTimeoutError, "Request timed out"
+    )
 
     # Act
     event = await risk_check_tool.run_async(args=args, tool_context=tool_context)
@@ -277,7 +272,6 @@ async def test_run_async_a2a_client_timeout(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping due to async generator mocking issues")
 async def test_run_async_a2a_http_error(
     risk_check_tool: A2ARiskCheckTool,
     tool_context: ToolContext,
@@ -300,15 +294,10 @@ async def test_run_async_a2a_http_error(
     mock_resolver_instance.get_agent_card.return_value = test_agent_card
     mock_a2a_client = mock_a2a_sdk_components["mock_a2a_client"]
 
-    # Create an async iterator that raises the error on the first iteration
-    async def mock_send_message_error_iterator(*args, **kwargs):
-        raise A2AClientHTTPError(message="Service Unavailable", status_code=503)
-
-    def mock_send_message_error(*args, **kwargs):
-        return mock_send_message_error_iterator(*args, **kwargs)
-
-    # Replace the send_message method directly with our error function
-    mock_a2a_client.send_message = mock_send_message_error
+    # Replace the send_message method with our error iterator using the helper function
+    mock_a2a_client.send_message = lambda *args, **kwargs: create_async_error_iterator(
+        A2AClientHTTPError, message="Service Unavailable", status_code=503
+    )
 
     # Act
     event = await risk_check_tool.run_async(args=args, tool_context=tool_context)
@@ -341,7 +330,6 @@ async def test_run_async_json_rpc_error(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping due to async generator mocking issues")
 async def test_run_async_transport_resolution_error(
     risk_check_tool: A2ARiskCheckTool,
     tool_context: ToolContext,
@@ -358,10 +346,16 @@ async def test_run_async_transport_resolution_error(
         "portfolio_state": {"cash": 10000.0, "shares": 50, "total_value": 15000.0},
         "risk_params": {"risk_guard_url": "http://mock-riskguard.com"},
     }
-    mock_resolver_instance = mock_a2a_sdk_components["mock_resolver_instance"]
-    mock_resolver_instance.get_agent_card.side_effect = A2AClientError(
-        "Could not resolve agent card"
+    mock_resolver_instance_risk_tool = mock_a2a_sdk_components[
+        "mock_resolver_instance_risk_tool"
+    ]
+
+    # Mock the agent card resolution to raise an A2AClientHTTPError
+    error_message = "Could not resolve agent card"
+    mock_resolver_instance_risk_tool.get_agent_card.side_effect = A2AClientHTTPError(
+        message=error_message, status_code=503
     )
+
     # Act
     event = await risk_check_tool.run_async(args=args, tool_context=tool_context)
 
@@ -373,4 +367,9 @@ async def test_run_async_transport_resolution_error(
     response_data = response_part.function_response.response
     assert response_data is not None
     assert response_data["approved"] is False
-    assert "A2A call failed or result not found." in response_data["reason"]
+
+    # Verify that the error message matches the expected format
+    expected_reason = (
+        f"A2A Network/HTTP Error: 503 - {error_message}. Is RiskGuard running?"
+    )
+    assert response_data["reason"] == expected_reason
