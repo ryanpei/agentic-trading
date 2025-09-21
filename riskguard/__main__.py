@@ -1,4 +1,5 @@
 import logging
+import os
 
 import click
 import common.config as defaults
@@ -6,34 +7,30 @@ from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
+from common.utils.agent_utils import configure_a2a_server_params
 
 from .agent import root_agent as riskguard_adk_agent
-from .agent_executor import RiskGuardAgentExecutor  # Renamed from RiskGuardTaskManager
+from .agent_executor import RiskGuardAgentExecutor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 @click.command()
-@click.option(
-    "--host",
-    default=defaults.DEFAULT_RISKGUARD_URL.split(":")[1].replace("//", ""),
-    help="Host to bind the server to.",
-)
-@click.option(
-    "--port",
-    default=int(defaults.DEFAULT_RISKGUARD_URL.split(":")[2]),
-    help="Port to bind the server to.",
-)
+@click.option("--host", help="Host to bind the server to.")
+@click.option("--port", type=int, help="Port to bind the server to.")
 def main(host: str, port: int):
     """Runs the RiskGuard ADK agent as an A2A server."""
     logger.info("Configuring RiskGuard A2A server...")
+    host, port, a2a_base_url = configure_a2a_server_params(
+        host_arg=host, port_arg=port, default_url=defaults.DEFAULT_RISKGUARD_URL
+    )
 
     try:
         agent_card = AgentCard(
             name=riskguard_adk_agent.name,
             description=riskguard_adk_agent.description,
-            url=f"http://{host}:{port}",  # SDK expects URL without trailing slash for server itself
+            url=a2a_base_url,  # Use the publicly accessible URL
             version="1.1.0",
             capabilities=AgentCapabilities(
                 streaming=False,

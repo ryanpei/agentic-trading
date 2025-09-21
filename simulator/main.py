@@ -345,26 +345,30 @@ async def _call_alphabot_a2a(
     Returns:
         A dictionary containing the outcome.
     """
-    # 1. Create a single, unified payload object.
-    payload = AlphaBotTaskPayload(
-        historical_prices=historical_prices,
-        current_price=current_price,
-        portfolio_state=CommonPortfolioState(
-            cash=portfolio.cash,
-            shares=portfolio.shares,
-            total_value=portfolio.total_value,
-        ),
-        day=day,
-        short_sma_period=params["alphabot_short_sma"],
-        long_sma_period=params["alphabot_long_sma"],
-        trade_quantity=params["alphabot_trade_qty"],
-        riskguard_url=params["riskguard_url"],
-        max_pos_size=params["riskguard_max_pos_size"],
-        max_concentration=params["riskguard_max_concentration"] / 100.0,
-    )
+    # 1. Create a dictionary payload that matches the AlphaBotTaskPayload model.
+    # We create a dict directly to avoid potential Pydantic model mismatches
+    # between the simulator's internal models and the common models.
+    payload_dict = {
+        "historical_prices": historical_prices,
+        "current_price": current_price,
+        "portfolio_state": {
+            "cash": portfolio.cash,
+            "shares": portfolio.shares,
+            "total_value": portfolio.total_value,
+        },
+        "day": day,
+        "short_sma_period": params["alphabot_short_sma"],
+        "long_sma_period": params["alphabot_long_sma"],
+        "trade_quantity": params["alphabot_trade_qty"],
+        "riskguard_url": params["riskguard_url"],
+        "max_pos_size": params["riskguard_max_pos_size"],
+        "max_concentration": params["riskguard_max_concentration"] / 100.0,
+    }
 
-    # 2. Use the new helper to create the A2A Request
-    sdk_request = create_a2a_request_from_payload(payload, role=Role.user)
+    # 2. Use the helper to create the A2A Request from the dictionary
+    sdk_request = create_a2a_request_from_payload(
+        DataPart(data=payload_dict), role=Role.user
+    )
 
     sim_logger.info(f"--- Calling AlphaBot A2A Server (Session ID: {session_id}) ---")
     outcome: Dict[str, Any] = {

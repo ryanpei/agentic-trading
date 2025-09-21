@@ -1,4 +1,5 @@
 import logging
+import os
 
 import click
 import common.config as defaults
@@ -6,6 +7,7 @@ from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
+from common.utils.agent_utils import configure_a2a_server_params
 
 # Import the specific AgentExecutor for AlphaBot
 from .agent_executor import AlphaBotAgentExecutor
@@ -15,26 +17,21 @@ logger = logging.getLogger(__name__)
 
 
 @click.command()
-@click.option(
-    "--host",
-    default=defaults.DEFAULT_ALPHABOT_URL.split(":")[1].replace("//", ""),
-    help="Host to bind the server to.",
-)
-@click.option(
-    "--port",
-    default=int(defaults.DEFAULT_ALPHABOT_URL.split(":")[2]),
-    help="Port to bind the server to.",
-)
+@click.option("--host", help="Host to bind the server to.")
+@click.option("--port", type=int, help="Port to bind the server to.")
 def main(host: str, port: int):
     """Runs the AlphaBot agent as an A2A server."""
     logger.info("Configuring AlphaBot A2A server...")
+    host, port, a2a_base_url = configure_a2a_server_params(
+        host_arg=host, port_arg=port, default_url=defaults.DEFAULT_ALPHABOT_URL
+    )
 
     # Define the Agent Card for AlphaBot
     try:
         agent_card = AgentCard(
             name="AlphaBot Agent",
             description="Trading agent that analyzes market data and portfolio state to propose trades.",
-            url=f"http://{host}:{port}",  # SDK expects URL without trailing slash for server itself
+            url=a2a_base_url,  # Use the publicly accessible URL
             version="1.0.0",
             capabilities=AgentCapabilities(
                 streaming=False,  # AlphaBotTaskManager doesn't support streaming

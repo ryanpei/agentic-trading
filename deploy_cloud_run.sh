@@ -61,15 +61,21 @@ gcloud builds submit . --config=$RISKGUARD_BUILDFILE \
 echo "Deploying RiskGuard service ($RISKGUARD_SERVICE_NAME)..."
 gcloud run deploy $RISKGUARD_SERVICE_NAME \
     --image=$RISKGUARD_IMAGE_TAG \
-    --platform managed \
     --region $REGION \
     --allow-unauthenticated \
     --project=$PROJECT_ID
 
 # Step 1.3: Get Service URL
-export RISKGUARD_SERVICE_URL=$(gcloud run services describe $RISKGUARD_SERVICE_NAME --platform managed --region $REGION --format 'value(status.url)' --project=$PROJECT_ID)
+export RISKGUARD_SERVICE_URL=$(gcloud run services describe $RISKGUARD_SERVICE_NAME --region $REGION --format 'value(status.url)' --project=$PROJECT_ID)
 echo "RiskGuard URL: $RISKGUARD_SERVICE_URL"
 echo "---"
+
+# Step 1.4: Update RiskGuard with the A2A_BASE_URL set as its own URL so that it can identify itself for A2A requests
+echo "Updating RiskGuard service env vars ($RISKGUARD_SERVICE_NAME)..."
+gcloud run services update $RISKGUARD_SERVICE_NAME \
+    --region $REGION \
+    --project $PROJECT_ID \
+    --update-env-vars="A2A_BASE_URL=$RISKGUARD_SERVICE_URL"
 
 # --- 2. Deploy AlphaBot ---
 echo "Deploying AlphaBot..."
@@ -84,16 +90,23 @@ gcloud builds submit . --config=$ALPHABOT_BUILDFILE \
 echo "Deploying AlphaBot service ($ALPHABOT_SERVICE_NAME)..."
 gcloud run deploy $ALPHABOT_SERVICE_NAME \
     --image=$ALPHABOT_IMAGE_TAG \
-    --platform managed \
     --region $REGION \
     --allow-unauthenticated \
     --set-env-vars="RISKGUARD_SERVICE_URL=$RISKGUARD_SERVICE_URL" \
-    --project=$PROJECT_ID
+    --project=$PROJECT_ID \
+    --
 
 # Step 2.3: Get Service URL
-export ALPHABOT_SERVICE_URL=$(gcloud run services describe $ALPHABOT_SERVICE_NAME --platform managed --region $REGION --format 'value(status.url)' --project=$PROJECT_ID)
+export ALPHABOT_SERVICE_URL=$(gcloud run services describe $ALPHABOT_SERVICE_NAME --region $REGION --format 'value(status.url)' --project=$PROJECT_ID)
 echo "AlphaBot URL: $ALPHABOT_SERVICE_URL"
 echo "---"
+
+# Step 2.4: Update Alphbot with A2A_BASE_URL set as its own URL so that it can identify itself for A2A requests
+echo "Updating Alphabot service env vars ($ALPHABOT_SERVICE_NAME)..."
+gcloud run services update $ALPHABOT_SERVICE_NAME \
+    --region $REGION \
+    --project $PROJECT_ID \
+    --update-env-vars="A2A_BASE_URL=$ALPHABOT_SERVICE_URL"
 
 # --- 3. Deploy Simulator ---
 echo "Deploying Simulator..."
@@ -108,14 +121,13 @@ gcloud builds submit . --config=$SIMULATOR_BUILDFILE \
 echo "Deploying Simulator service ($SIMULATOR_SERVICE_NAME)..."
 gcloud run deploy $SIMULATOR_SERVICE_NAME \
     --image=$SIMULATOR_IMAGE_TAG \
-    --platform managed \
      --region $REGION \
      --allow-unauthenticated \
      --set-env-vars="ALPHABOT_SERVICE_URL=$ALPHABOT_SERVICE_URL,RISKGUARD_SERVICE_URL=$RISKGUARD_SERVICE_URL" \
      --project=$PROJECT_ID
  
  # Step 3.3: Get Service URL
-export SIMULATOR_SERVICE_URL=$(gcloud run services describe $SIMULATOR_SERVICE_NAME --platform managed --region $REGION --format 'value(status.url)' --project=$PROJECT_ID)
+export SIMULATOR_SERVICE_URL=$(gcloud run services describe $SIMULATOR_SERVICE_NAME --region $REGION --format 'value(status.url)' --project=$PROJECT_ID)
 echo "Simulator UI URL: $SIMULATOR_SERVICE_URL"
 echo "---"
 

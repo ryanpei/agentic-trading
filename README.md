@@ -71,7 +71,7 @@ This project utilizes the A2A protocol for the critical communication link betwe
     *   AlphaBot sends a sub-task to RiskGuard containing the proposed trade details.
 *   **Message/Part:** Data like market state, portfolio details, and trade proposals are exchanged within A2A Messages using appropriate Parts (likely `DataPart` for structured JSON).
 *   **Artifact:** RiskGuard returns its assessment (approved/rejected with reason) as an Artifact within the A2A response to AlphaBot. AlphaBot may also use artifacts to return structured results to the Simulator.
-*   **Agent Card:** While not explicitly fetched dynamically in this simplified local setup, in a real-world scenario, AlphaBot could discover RiskGuard's capabilities and endpoint URL by fetching its `agent.json` file (Agent Card). The ADK framework handles much of the underlying A2A protocol implementation details.
+*   **Agent Card:** The Simulator service fetches Alphbot's agent card, and in the Cloud Run deployment, AlphaBot can discover RiskGuard's capabilities by fetching its `agent.json` file (Agent Card). The ADK framework handles much of the underlying A2A protocol implementation details.
 
 This demonstrates how A2A enables modularity, allowing specialized agents to collaborate effectively.
 
@@ -146,6 +146,7 @@ The `deploy_cloud_run.sh` script automates the deployment of all three services 
 1. **Set your Google Cloud Project ID:** Edit the script and replace `"your-gcp-project-id"` with your actual project ID, or set the `PROJECT_ID` environment variable.
 2. **Authenticate `gcloud`:** Ensure you are logged in with the necessary permissions (`gcloud auth login`, `gcloud config set project YOUR_PROJECT_ID`).
 3. **Enable APIs:** The script attempts to enable required APIs (Cloud Run, Cloud Build, Artifact Registry). Ensure your account has permission to do this.
+4. **Grant Cloud Run Invoker role to Compute Service Account:** This script grants the default compute service account to the Cloud Run services, which may not have the Cloud Run Invoker role assigned to it. For these agents to call each other over A2A, they need this role. 
 
 **Run the script:**
 
